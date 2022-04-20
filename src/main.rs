@@ -9,6 +9,7 @@ use clap::arg;
 use clap::ArgMatches;
 use clap::{command, Command};
 use config::check_root_present;
+use git2::Repository;
 use glob::glob;
 use io_util::check_dir_null_or_empty;
 use io_util::check_empty;
@@ -76,10 +77,21 @@ fn main() {
 }
 
 fn init() -> io::Result<()> {
+    // check that we don't accidentally populate an existing directory
     check_empty("")?;
-    fs::write(config::ROOT_PATH, config::ROOT)
+    // create the default root configuration
+    fs::write(config::ROOT_PATH, config::ROOT)?;
+
+    // initialize a new git repository 
+    let repo = match Repository::init("./") {
+        Ok(value) => value,
+        Err(_) => return Err(io::Error::new(io::ErrorKind::Other, "could not initialise git repository")),
+    };
+
+    Ok(())
 }
 
+/// runs the config command
 fn config(matches: &ArgMatches) -> io::Result<()> {
     check_root_present()?;
 
@@ -91,11 +103,13 @@ fn config(matches: &ArgMatches) -> io::Result<()> {
     }
 }
 
+/// creates a new config
 fn config_create(matches: &ArgMatches) -> io::Result<()> {
     let name = matches.value_of("NAME").expect("name not provided");
     config::create_config(name)
 }
 
+/// deletes a config
 fn config_delete(matches: &ArgMatches) -> io::Result<()> {
     let name = matches.value_of("NAME").expect("name not provided");
     config::delete_config(name)
@@ -115,7 +129,7 @@ fn deploy() -> io::Result<()> {
             match env::consts::OS {
                 "windows" => deploy_to(
                     path.file_name().unwrap().to_str().unwrap(),
-                    local_config.deploy.windows.target,
+                    local_config.deploy.windows.target.as_str(),
                 )?,
                 _ => (),
             }
@@ -127,11 +141,12 @@ fn deploy() -> io::Result<()> {
     Ok(())
 }
 
-fn deploy_to(name: &str, path: String) -> io::Result<()> {
-    check_dir_null_or_empty(path.as_str())?;
-    let path = path.as_str();
+fn deploy_to(name: &str, path: &str) -> io::Result<()> {
+    // checks if the directory already has files in it
+    check_dir_null_or_empty(path)?;
     fs::create_dir_all(path)?;
 
+    // switches the directory to the configuration
     let dir = env::current_dir()?;
     env::set_current_dir(name)?;
 
@@ -147,8 +162,6 @@ fn deploy_to(name: &str, path: String) -> io::Result<()> {
                 let to = to.as_path();
                 let inner = inner.as_path();
                 fs::create_dir_all(to.parent().unwrap())?;
-                println!("{:?}", to);
-                println!("{:?}", inner);
                 fs::copy(inner, to).unwrap();
             }
         } else {

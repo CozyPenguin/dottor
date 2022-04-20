@@ -1,4 +1,4 @@
-use std::{env, fs, io};
+use std::{cmp::Ordering, env, fs, io};
 
 use regex::Regex;
 use serde::{
@@ -8,9 +8,43 @@ use serde::{
 
 use crate::io_util::{check_dir_exists, check_dir_null_or_empty, file_exists, prompt_bool};
 
-pub const ROOT: &str = r#"exclude = [] # an array of directories which aren't indexed by dottor
+#[allow(dead_code)]
+#[derive(Deserialize, Debug)]
+pub struct RootConfiguration {
+    pub exclude: Vec<String>,
+    pub synchronization: RootSynchronization,
+}
 
-[synchronisation]
+impl Default for RootConfiguration {
+    fn default() -> Self {
+        Self {
+            exclude: vec![".git/**".to_string()],
+            synchronization: Default::default(),
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Deserialize, Debug)]
+pub struct RootSynchronization {
+    pub repository: String,
+    pub remote: String,
+    pub branch: String,
+}
+
+impl Default for RootSynchronization {
+    fn default() -> Self {
+        Self {
+            repository: Default::default(),
+            remote: String::from("origin"),
+            branch: String::from("main"),
+        }
+    }
+}
+
+pub const ROOT: &str = r#"exclude = [".git/**"] # an array of globs which aren't indexed by dottor
+
+[synchronization]
 ## The repository field can be set either to a "user/repository" string, which will automatically search for that repository on github
 ## or alternatively be set to a complete url, e.g. "https://my-fabulous-git-server.com/omega-dotfiles/"
 repository = ""
@@ -39,7 +73,7 @@ pub fn check_root_present() -> io::Result<()> {
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct Configuration {
     pub config: Config,
     pub deploy: Deploy,
@@ -47,13 +81,13 @@ pub struct Configuration {
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct Config {
     pub name: Option<String>,
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct Deploy {
     pub exclude: Vec<String>,
     pub windows: DeployTarget,
@@ -61,13 +95,13 @@ pub struct Deploy {
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct DeployTarget {
     pub target: String,
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct Dependencies {
     pub simple: SimpleDependencies,
     pub local: Vec<LocalDependency>,
@@ -75,7 +109,7 @@ pub struct Dependencies {
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Default)]
 pub struct SimpleDependencies {
     pub local: Vec<String>,
     pub system: Vec<String>,
@@ -85,33 +119,156 @@ pub struct SimpleDependencies {
 #[derive(Deserialize, Debug)]
 pub struct LocalDependency {
     name: String,
+    #[serde(default)]
     required: bool,
+}
+
+impl Default for LocalDependency {
+    fn default() -> Self {
+        Self {
+            name: Default::default(),
+            required: true,
+        }
+    }
 }
 
 #[allow(dead_code)]
 #[derive(Deserialize, Debug)]
 pub struct SystemDependency {
     name: String,
+    #[serde(default)]
     required: bool,
-    version_args: String,
     #[serde(deserialize_with = "de_from_str")]
     version: Version,
+    #[serde(default)]
+    version_args: String,
+}
+
+impl Default for SystemDependency {
+    fn default() -> Self {
+        Self {
+            name: Default::default(),
+            required: true,
+            version: Default::default(),
+            version_args: String::from("--version"),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum VersionSpecifier {
+    Any,
+    None,
+    Equals,
+    GreaterEquals,
+    GreaterThan,
+    LessEquals,
+    LessThan,
+    MatchMinor,
+    MatchMajor,
 }
 
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct Version {
-    major: u32,
-    minor: u32,
-    patch: u32,
+    pub specifier: VersionSpecifier,
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
 }
 
 impl Version {
-    pub fn new(major: u32, minor: u32, patch: u32) -> Version {
+    pub fn new(specifier: VersionSpecifier, major: u32, minor: u32, patch: u32) -> Version {
         Version {
+            specifier: specifier,
             major: major,
             minor: minor,
             patch: patch,
+        }
+    }
+
+    pub fn any() -> Version {
+        Version {
+            specifier: VersionSpecifier::Any,
+            major: 0,
+            minor: 0,
+            patch: 0,
+        }
+    }
+
+    pub fn compatible(&self, version: &Self) -> bool {
+        match self.specifier {
+            VersionSpecifier::Any => true,
+            VersionSpecifier::None | VersionSpecifier::MatchMajor => self.major == version.major,
+            VersionSpecifier::Equals => self == version,
+            VersionSpecifier::GreaterEquals => self >= version,
+            VersionSpecifier::GreaterThan => self > version,
+            VersionSpecifier::LessEquals => self <= version,
+            VersionSpecifier::LessThan => self < version,
+            VersionSpecifier::MatchMinor => {
+                self.major == version.major && self.minor == version.minor
+            }
+        }
+    }
+}
+
+impl PartialEq for Version {
+    fn eq(&self, other: &Self) -> bool {
+        self.major == other.major && self.minor == other.minor && self.patch == other.patch
+    }
+
+    fn ne(&self, other: &Self) -> bool {
+        self.major != other.major || self.minor != other.minor || self.patch != other.patch
+    }
+}
+
+impl PartialOrd for Version {
+    fn ge(&self, other: &Self) -> bool {
+        self.major >= other.major
+            || self.major == other.major && self.minor >= other.minor
+            || self.major == other.major && self.minor == other.minor && self.patch >= other.patch
+    }
+
+    fn gt(&self, other: &Self) -> bool {
+        self.major > other.major
+            || self.major == other.major && self.minor > other.minor
+            || self.major == other.major && self.minor == other.minor && self.patch > other.patch
+    }
+    fn le(&self, other: &Self) -> bool {
+        self.major <= other.major
+            || self.major == other.major && self.minor <= other.minor
+            || self.major == other.major && self.minor == other.minor && self.patch <= other.patch
+    }
+    fn lt(&self, other: &Self) -> bool {
+        self.major < other.major
+            || self.major == other.major && self.minor < other.minor
+            || self.major == other.major && self.minor == other.minor && self.patch < other.patch
+    }
+
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        let major = self.major.partial_cmp(&other.major)?;
+        if major != Ordering::Equal {
+            return Some(major);
+        }
+        let minor = self.minor.partial_cmp(&other.minor)?;
+        if minor != Ordering::Equal {
+            return Some(minor);
+        }
+        let patch = self.minor.partial_cmp(&other.patch)?;
+        if patch != Ordering::Equal {
+            return Some(patch);
+        }
+        Some(Ordering::Equal)
+    }
+}
+
+impl Default for Version {
+    fn default() -> Self {
+        Self {
+            specifier: VersionSpecifier::None,
+            major: 1,
+            minor: 0,
+            patch: 0,
         }
     }
 }
@@ -142,10 +299,36 @@ impl<'de> Deserialize<'de> for Version {
                 E: de::Error,
             {
                 lazy_static::lazy_static! {
-                    static ref RE: Regex = Regex::new(r"^(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$").unwrap();
+                    static ref RE: Regex = Regex::new(r"^(?P<asterisk>\*)$|^(?P<specifier>=|>=|>|<=|<|~|\^)?(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$").unwrap();
+                }
+
+                if !RE.is_match(&v) {
+                    return Err(de::Error::custom("could not parse version"));
                 }
 
                 let version_match = RE.captures(&v).unwrap();
+
+                // matches the single asterisk
+                if let Some(_) = version_match.name("asterisk") {
+                    return Ok(Version::any());
+                }
+
+                // checks for specifier
+                let specifier = match version_match.name("specifier") {
+                    Some(value) => match value.as_str() {
+                        "=" => VersionSpecifier::Equals,
+                        ">=" => VersionSpecifier::GreaterEquals,
+                        ">" => VersionSpecifier::GreaterThan,
+                        "<=" => VersionSpecifier::LessEquals,
+                        "<" => VersionSpecifier::LessThan,
+                        "~" => VersionSpecifier::MatchMinor,
+                        "^" => VersionSpecifier::MatchMajor,
+                        _ => return Err(de::Error::custom("invalid version specifier")),
+                    },
+                    None => VersionSpecifier::None,
+                };
+
+                // matches actual version
                 let major = version_match
                     .name("major")
                     .ok_or_else(|| de::Error::custom("no major version found"))?
@@ -165,7 +348,7 @@ impl<'de> Deserialize<'de> for Version {
                     .parse::<u32>()
                     .unwrap();
 
-                Ok(Version::new(major, minor, patch))
+                Ok(Version::new(specifier, major, minor, patch))
             }
         }
 
