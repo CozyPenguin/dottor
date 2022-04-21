@@ -1,15 +1,21 @@
-use std::{cmp::Ordering, env, fs, io};
+use std::{cmp::Ordering, path::Path};
 
 use regex::Regex;
 use serde::{
     de::{self, Visitor},
-    Deserialize,
+    Deserialize, Serialize,
 };
 
-use crate::io_util::{check_dir_exists, check_dir_null_or_empty, file_exists, prompt_bool};
+use crate::{
+    err::{self, Error},
+    io_util::{
+        check_dir_null_or_empty, check_root_present, check_valid_dir, create_dir_all, current_dir,
+        prompt_bool, read_to_string, remove_dir_all, write,
+    },
+};
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct RootConfiguration {
     pub exclude: Vec<String>,
     pub synchronization: RootSynchronization,
@@ -18,14 +24,14 @@ pub struct RootConfiguration {
 impl Default for RootConfiguration {
     fn default() -> Self {
         Self {
-            exclude: vec![".git/**".to_string()],
+            exclude: vec![".git/".to_string()],
             synchronization: Default::default(),
         }
     }
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct RootSynchronization {
     pub repository: String,
     pub remote: String,
@@ -37,43 +43,23 @@ impl Default for RootSynchronization {
         Self {
             repository: Default::default(),
             remote: String::from("origin"),
-            branch: String::from("main"),
+            branch: {
+                // tries to set the default branch name to the one specified in the git configuration, with "main" as a fallback
+                match git2::Config::open_default() {
+                    Ok(config) => config
+                        .get_string("init.defaultBranch")
+                        .unwrap_or(String::from("main")),
+                    Err(_) => String::from("main"),
+                }
+            },
         }
     }
 }
-
-pub const ROOT: &str = r#"exclude = [".git/**"] # an array of globs which aren't indexed by dottor
-
-[synchronization]
-## The repository field can be set either to a "user/repository" string, which will automatically search for that repository on github
-## or alternatively be set to a complete url, e.g. "https://my-fabulous-git-server.com/omega-dotfiles/"
-repository = ""
-# remote = "origin"
-# branch = "main"
-"#;
 
 pub const ROOT_PATH: &str = "dottor.toml";
 
-pub fn check_root_present() -> io::Result<()> {
-    let result = file_exists(ROOT_PATH);
-
-    match result {
-        Ok(exists) => {
-            if exists {
-                Ok(())
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("Directory doesn't contain root config '{ROOT_PATH}'."),
-                ))
-            }
-        }
-        Err(err) => Err(err),
-    }
-}
-
 #[allow(dead_code)]
-#[derive(Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Configuration {
     pub config: Config,
     pub deploy: Deploy,
@@ -81,42 +67,61 @@ pub struct Configuration {
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Config {
     pub name: Option<String>,
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Deploy {
     pub exclude: Vec<String>,
+    #[serde(default)]
+    pub target_require_empty: bool,
     pub windows: DeployTarget,
     pub linux: DeployTarget,
 }
 
-#[allow(dead_code)]
-#[derive(Deserialize, Debug, Default)]
-pub struct DeployTarget {
-    pub target: String,
+impl Default for Deploy {
+    fn default() -> Self {
+        Self {
+            exclude: Default::default(),
+            target_require_empty: true,
+            windows: Default::default(),
+            linux: Default::default(),
+        }
+    }
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct DeployTarget {
+    pub target: String,
+    pub target_require_empty: Option<bool>,
+}
+
+#[allow(dead_code)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Dependencies {
+    #[serde(default)]
     pub simple: SimpleDependencies,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local: Vec<LocalDependency>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub system: Vec<SystemDependency>,
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct SimpleDependencies {
+    #[serde(default)]
     pub local: Vec<String>,
+    #[serde(default)]
     pub system: Vec<String>,
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct LocalDependency {
     name: String,
     #[serde(default)]
@@ -133,12 +138,15 @@ impl Default for LocalDependency {
 }
 
 #[allow(dead_code)]
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct SystemDependency {
     name: String,
     #[serde(default)]
     required: bool,
-    #[serde(deserialize_with = "de_from_str")]
+    #[serde(
+        deserialize_with = "Version::deserialize",
+        serialize_with = "Version::serialize"
+    )]
     version: Version,
     #[serde(default)]
     version_args: String,
@@ -273,11 +281,13 @@ impl Default for Version {
     }
 }
 
-fn de_from_str<'de, D>(deserializer: D) -> Result<Version, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    Version::deserialize(deserializer)
+impl Serialize for Version {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(format!("{}.{}.{}", self.major, self.minor, self.patch).as_str())
+    }
 }
 
 impl<'de> Deserialize<'de> for Version {
@@ -356,63 +366,49 @@ impl<'de> Deserialize<'de> for Version {
     }
 }
 
-pub const CONFIG: &str = r#"[config]
-# name = '' # defaults to directory name
-
-[deploy]
-exclude = [] # an array of globs which aren't exported
-
-    [deploy.windows]
-    target = ''
-
-    [deploy.linux]
-    target = ''
-
-## Specify dependencies on other configurations or programs that are required for this configuration
-[dependencies]
-    [dependencies.simple]
-    ## The easiest way to declare a local dependency is to add a string to the 'local' array.
-    ## For example, the string "theming" will make the configuration depend on the config with the name "theming"
-    local = [] 
-    ## System dependencies are used to check if programs or files are present on the system path
-    system = []
-
-    # ## You can also declare more complex dependencies using [dependencies.local.name] or [dependencies.system.name]
-    # [[dependencies.local]]
-    # name = 'example' # the name of the configuration
-    # required = true # if false, config deployment will not fail if the dependency isn't found or failed itself
- 
-    # [[dependencies.system]]
-    # name = 'example' # the program/file this config depends on
-    # required = true # if false, config deployment will not fail if the dependency isn't found or the versions don't match
-    # ## Dottor can check if a dependency meets specific version requirements
-    # ## To do so, the dependency is executed with an argument from which the semantic version, according to semver 2.0.0, is parsed using a regex
-    # ## version checking makes use of version ranges (there's a great overview available at https://github.com/QuiltMC/rfcs/blob/master/specification/0002-quilt.mod.json.md#version-specifier):
-    # ## WARNING! using this will execute the program, so don't use this if you don't trust the program or the system you're working on
-    # version = '0.1.0' # the version requirement
-    # version_args = '--version' # the arguments that should be passed to the program, common options include "--version" or "-v"
-"#;
-
 pub const CONFIG_PATH: &str = "dotconfig.toml";
 
-pub fn create_config(name: &str) -> io::Result<()> {
-    let mut path = env::current_dir()?;
+pub fn create_config(name: &Path) -> err::Result<()> {
+    let mut path = current_dir()?;
     path.push(name);
     check_dir_null_or_empty(name)?;
 
-    fs::create_dir_all(path.clone())?;
+    create_dir_all(path.as_path())?;
     path.push(CONFIG_PATH);
-    fs::write(path, CONFIG)
+    write(
+        path.as_path(),
+        toml::to_string_pretty(&Configuration::default())
+            .map_err(|_| Error::new("Could not create configuration file in config."))?,
+    )
 }
 
-pub fn delete_config(name: &str) -> io::Result<()> {
-    check_dir_exists(name)?;
+pub fn delete_config(name: &str) -> err::Result<()> {
+    check_valid_dir(name)?;
     if prompt_bool(
         "Proceeding will cause the config and all files in the directory to be deleted.",
         false,
     ) {
-        fs::remove_dir_all(name)
+        remove_dir_all(name.as_ref())
     } else {
         Ok(())
     }
+}
+
+pub fn read_configuration(file: &Path) -> err::Result<Configuration> {
+    let source = read_to_string(file)?;
+    let config = toml::from_str(&source[..]).map_err(|_| {
+        Error::from_string(format!(
+            "Could not parse configuration file '{}'.",
+            file.display()
+        ))
+    })?;
+    return Ok(config);
+}
+
+pub fn read_root_configuration() -> err::Result<RootConfiguration> {
+    check_root_present()?;
+    let source = read_to_string(ROOT_PATH)?;
+    let config = toml::from_str(&source[..])
+        .map_err(|_| Error::new("Could not parse root configuration."))?;
+    return Ok(config);
 }

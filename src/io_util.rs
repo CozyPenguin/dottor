@@ -1,63 +1,110 @@
 use std::{
     env,
-    fs::{ReadDir, self},
-    io::{self, stdin, stdout, Read, Write}, path::Path,
+    fs::{self, ReadDir},
+    io::{stdin, stdout, Read, Write},
+    path::{Path, PathBuf},
+    thread::current,
 };
 
-use crate::config::{Configuration};
+use crate::{
+    config,
+    err::{self, Error},
+};
 
-pub fn list_root() -> io::Result<ReadDir> {
-    env::current_dir()?.read_dir()
+pub fn is_root_present() -> err::Result<bool> {
+    file_exists(config::ROOT_PATH)
 }
 
-pub fn check_empty(dir: &str) -> io::Result<()> {
-    let mut path = env::current_dir()?;
-    path.push(dir);
-    if path.read_dir()?.next().is_none() {
+pub fn check_root_present() -> err::Result<()> {
+    if is_root_present()? {
         Ok(())
     } else {
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "Directory isn't empty.",
-        ))
+        Err(Error::from_string(format!(
+            "Directory doesn't contain root config '{}'.",
+            config::ROOT_PATH
+        )))
     }
 }
 
-pub fn check_dir_null_or_empty(dir: &str) -> io::Result<()> {
-    if dir_exists(dir)? {
+pub fn list_root() -> err::Result<ReadDir> {
+    current_dir()?
+        .read_dir()
+        .map_err(|_| Error::new("Could not read contents of root directory."))
+}
+
+pub fn current_dir() -> err::Result<PathBuf> {
+    env::current_dir().map_err(|_| Error::new("Failed to resolve current directory. "))
+}
+
+pub fn set_current_dir<P: AsRef<Path>>(path: P) -> err::Result<()> {
+    env::set_current_dir(path).map_err(|_| Error::new("Could not change directory."))
+}
+
+pub fn read_dir(dir: &PathBuf) -> err::Result<ReadDir> {
+    dir.read_dir()
+        .map_err(|_| Error::new("Failed to read contents of current directory. "))
+}
+
+/// ensures that the passed directory is empty
+pub fn check_empty<P: AsRef<Path>>(dir: P) -> err::Result<()> {
+    let mut path = current_dir()?;
+    path.push(dir);
+    if read_dir(&path)?.next().is_none() {
+        Ok(())
+    } else {
+        Err(Error::from_string(format!("Directory isn't empty.")))
+    }
+}
+
+/// ensures that the passed directory doesn't exist or is empty
+pub fn check_dir_null_or_empty<P: AsRef<Path>>(dir: P) -> err::Result<()> {
+    if is_dir(dir.as_ref())? {
         check_empty(dir)?;
     }
     Ok(())
 }
 
-pub fn check_dir_exists(dir: &str) -> io::Result<()> {
-    match dir_exists(dir) {
+/// ensures that the passed path is a valid directory
+pub fn check_valid_dir<P: AsRef<Path>>(dir: P) -> err::Result<()> {
+    match is_dir(dir) {
         Ok(value) => {
             if value {
                 Ok(())
-            } else { Err(io::Error::new(io::ErrorKind::NotFound, "Directory doesn't exist."))
+            } else {
+                Err(Error::new("Directory not valid."))
             }
         }
         Err(error) => Err(error),
     }
 }
 
-pub fn dir_exists(dir: &str) -> io::Result<bool> {
-    let mut path = env::current_dir()?;
+pub fn is_dir<P: AsRef<Path>>(dir: P) -> err::Result<bool> {
+    let mut path = current_dir()?;
     path.push(dir);
     return Ok(path.exists() && path.is_dir());
 }
 
-pub fn file_exists(file: &str) -> io::Result<bool> {
-    let mut path = env::current_dir()?;
+pub fn file_exists<P: AsRef<Path>>(file: P) -> err::Result<bool> {
+    let mut path = current_dir()?;
     path.push(file);
     return Ok(path.exists() && path.is_file());
 }
 
-pub fn parse_config(file: &Path) -> io::Result<Configuration> {
-    let source = fs::read_to_string(file)?;
-    let config = toml::from_str(&source[..])?;
-    return Ok(config);
+pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> err::Result<()> {
+    fs::write(path, contents).map_err(|_| Error::from_string(format!("Could not write to path")))
+}
+
+pub fn read_to_string<P: AsRef<Path>>(file: P) -> err::Result<String> {
+    fs::read_to_string(file).map_err(|_| Error::new("Could not read file."))
+}
+
+pub fn create_dir_all<P: AsRef<Path>>(dir: P) -> err::Result<()> {
+    fs::create_dir_all(dir).map_err(|_| Error::from_string(format!("Could not create directory")))
+}
+
+pub fn remove_dir_all(dir: &Path) -> err::Result<()> {
+    fs::remove_dir_all(dir)
+        .map_err(|_| Error::from_string(format!("Could not remove directory '{}'", dir.display())))
 }
 
 pub fn prompt_bool(message: &str, default: bool) -> bool {

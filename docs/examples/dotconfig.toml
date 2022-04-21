@@ -1,0 +1,38 @@
+[config]
+# name = '' # defaults to directory name
+
+[deploy]
+exclude = [] # an array of globs which aren't exported
+target_require_empty = true # if true, the target directory has to be empty
+
+    [deploy.windows]
+    target = ''
+    # target_require_empty = true # defaults to deploy.target_require_empty
+
+    [deploy.linux]
+    target = ''
+    # target_require_empty = true # defaults to deploy.target_require_empty
+
+## Specify dependencies on other configurations or programs that are required for this configuration
+[dependencies]
+    [dependencies.simple]
+    ## The easiest way to declare a local dependency is to add a string to the 'local' array.
+    ## For example, the string "theming" will make the configuration depend on the config with the name "theming"
+    local = [] 
+    ## System dependencies are used to check if programs or files are present on the system path
+    system = []
+
+    # ## You can also declare more complex dependencies using [[dependencies.local]] or [[dependencies.system]]
+    # [[dependencies.local]]
+    # name = 'example' # the name of the configuration
+    # required = true # if false, config deployment will not fail if the dependency isn't found or failed itself
+ 
+    # [[dependencies.system]]
+    # name = 'example' # the program/file this config depends on
+    # required = true # if false, config deployment will not fail if the dependency isn't found or the versions don't match
+    # ## Dottor can check if a dependency meets specific version requirements
+    # ## To do so, the dependency is executed with an argument from which the semantic version, according to semver 2.0.0, is parsed using a regex
+    # ## version checking makes use of version ranges (there's a great overview available at https://github.com/QuiltMC/rfcs/blob/master/specification/0002-quilt.mod.json.md#version-specifier):
+    # ## WARNING! using this will execute the program, so don't use this if you don't trust the program or the system you're working on
+    # version = '0.1.0' # the version requirement
+    # version_args = '--version' # the arguments that should be passed to the program, common options include "--version" or "-v"

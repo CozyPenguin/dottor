@@ -1,0 +1,8 @@
+exclude = [".git/"] # an array of folders which aren't indexed by dottor
+
+[synchronization]
+## The repository field can be set either to a "user/repository" string, which will automatically search for that repository on github
+## or alternatively be set to a complete url, e.g. "https://my-fabulous-git-server.com/omega-dotfiles/"
+repository = ""
+# remote = "origin"
+# branch = "main" # defaults to the default branch in your git configuration
