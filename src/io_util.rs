@@ -3,7 +3,6 @@ use std::{
     fs::{self, ReadDir},
     io::{stdin, stdout, Read, Write},
     path::{Path, PathBuf},
-    thread::current,
 };
 
 use crate::{
@@ -46,19 +45,19 @@ pub fn read_dir(dir: &PathBuf) -> err::Result<ReadDir> {
 }
 
 /// ensures that the passed directory is empty
-pub fn check_empty<P: AsRef<Path>>(dir: P) -> err::Result<()> {
+pub fn check_empty(dir: &Path) -> err::Result<()> {
     let mut path = current_dir()?;
     path.push(dir);
     if read_dir(&path)?.next().is_none() {
         Ok(())
     } else {
-        Err(Error::from_string(format!("Directory isn't empty.")))
+        Err(Error::from_string(format!("Directory '{}' isn't empty.", dir.display())))
     }
 }
 
 /// ensures that the passed directory doesn't exist or is empty
-pub fn check_dir_null_or_empty<P: AsRef<Path>>(dir: P) -> err::Result<()> {
-    if is_dir(dir.as_ref())? {
+pub fn check_dir_null_or_empty(dir: &Path) -> err::Result<()> {
+    if is_dir(dir)? {
         check_empty(dir)?;
     }
     Ok(())

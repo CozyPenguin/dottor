@@ -1,13 +1,14 @@
-#![feature(iter_collect_into)]
+#![feature(let_chains)]
 
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 use clap::arg;
 use clap::ArgMatches;
 use clap::{command, Command};
-use config::read_configuration;
+use config::Configuration;
 use config::RootConfiguration;
 use err::Error;
 use git2::Repository;
@@ -17,7 +18,6 @@ use io_util::check_empty;
 use io_util::check_root_present;
 use io_util::create_dir_all;
 use io_util::current_dir;
-use io_util::list_root;
 use io_util::set_current_dir;
 use io_util::write;
 use structure::Structure;
@@ -79,7 +79,7 @@ fn main() {
     if let Err(error) = match matches.subcommand() {
         Some((subcommands::INIT, _)) => init(),
         Some((subcommands::CONFIG, sub_matches)) => config(sub_matches, structure),
-        Some((subcommands::DEPLOY, _)) => deploy(),
+        Some((subcommands::DEPLOY, _)) => deploy(structure),
         _ => Ok(()),
     } {
         eprintln!("{} Aborting!", error);
@@ -88,7 +88,7 @@ fn main() {
 
 fn init() -> err::Result<()> {
     // check that we don't accidentally populate an existing directory
-    check_empty("")?;
+    check_empty(Path::new(""))?;
     // create the default root configuration
     write(
         config::ROOT_PATH,
@@ -151,40 +151,50 @@ fn config_delete(matches: &ArgMatches, structure: Structure) -> err::Result<()> 
     config::delete_config(name)
 }
 
-fn deploy() -> err::Result<()> {
-    let dirs = list_root()?;
+fn deploy(structure: Option<Structure>) -> err::Result<()> {
+    let structure = verify_structure(structure)?;
 
-    for dir in dirs {
-        let dir = dir.map_err(|_| Error::new("Error while reading config directory."))?;
-        let mut path = dir.path();
-        path.push(config::CONFIG_PATH);
-
-        if path.exists() && path.is_file() {
-            let local_config = read_configuration(&path)?;
-            path.pop();
-            match env::consts::OS {
-                "windows" => deploy_to(
-                    path.file_name().unwrap().to_str().unwrap(),
-                    local_config.deploy.windows.target.as_str(),
-                )?,
-                _ => (),
-            }
-        } else {
-            ()
-        }
+    for (name, config) in structure.configs {
+        deploy_to(name, config)?;
     }
 
     Ok(())
 }
 
-fn deploy_to(name: &str, path: &str) -> err::Result<()> {
+fn deploy_to(name: String, config: Configuration) -> err::Result<()> {
+    let path = Path::new(&name);
+
+    let target = match env::consts::OS {
+        "windows" => config.deploy.windows,
+        value => {
+            return Err(Error::from_string(format!(
+                "Operating system '{value}' is not supported."
+            )))
+        }
+    };
+
     // checks if the directory already has files in it
-    check_dir_null_or_empty(path)?;
-    create_dir_all(path)?;
+
+    match &target.target_require_empty {
+        Some(value) => {
+            if *value {
+                check_dir_null_or_empty(path)?;
+            }
+        }
+        None => {
+            if config.deploy.target_require_empty {
+                check_dir_null_or_empty(path)?;
+            }
+        }
+    }
+    if let Some(inner) = &target.target_require_empty && inner == &true {
+        check_dir_null_or_empty(path)?;
+    }
+    create_dir_all(&name)?;
 
     // switches the directory to the configuration
     let dir = current_dir()?;
-    set_current_dir(name)?;
+    set_current_dir(&name)?;
 
     let pattern = "./**/*";
 
@@ -193,7 +203,7 @@ fn deploy_to(name: &str, path: &str) -> err::Result<()> {
     {
         if let Ok(inner) = entry {
             if !inner.to_str().unwrap().eq(config::CONFIG_PATH) && inner.is_file() {
-                let mut to = PathBuf::from(path);
+                let mut to = PathBuf::from(&target.target);
                 to.push(inner.clone());
                 let to = to.as_path();
                 let inner = inner.as_path();
