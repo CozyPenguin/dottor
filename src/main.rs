@@ -61,10 +61,12 @@ fn main() {
                         .arg_required_else_help(true)
                         .arg(arg!(<NAME> "The name of the configuration")),
                 )
-                .arg(arg!([NAME] "The name of the configuration")),
+                .arg(arg!(<NAME> "The name of the configuration")),
         )
         .subcommand(
-            Command::new(subcommands::DEPLOY).about("Deploy your configurations to the system"),
+            Command::new(subcommands::DEPLOY)
+                .about("Deploy your configurations to the system")
+                .arg(arg!([name] "The name of the configuration")),
         )
         .subcommand(
             Command::new(subcommands::INIT)
@@ -79,7 +81,7 @@ fn main() {
     if let Err(error) = match matches.subcommand() {
         Some((subcommands::INIT, _)) => init(),
         Some((subcommands::CONFIG, sub_matches)) => config(sub_matches, structure),
-        Some((subcommands::DEPLOY, _)) => deploy(structure),
+        Some((subcommands::DEPLOY, sub_matches)) => deploy(sub_matches, structure),
         _ => Ok(()),
     } {
         eprintln!("{} Aborting!", error);
@@ -152,17 +154,32 @@ fn config_delete(matches: &ArgMatches, structure: Structure) -> err::Result<()> 
     config::delete_config(name)
 }
 
-fn deploy(structure: Option<Structure>) -> err::Result<()> {
-    let structure = verify_structure(structure)?;
+fn deploy(matches: &ArgMatches, structure: Option<Structure>) -> err::Result<()> {
+    check_root_present()?;
+    let mut structure = verify_structure(structure)?;
 
-    for (name, config) in structure.configs {
-        deploy_to(name, config)?;
+    let name = matches.value_of("NAME");
+
+    if let Some(name) = name {
+        let config = structure.configs.remove(name);
+        match config {
+            Some(config) => deploy_to(&String::from(name), config),
+            None => Err(Error::from_string(format!(
+                "Config '{name}' does not exist."
+            ))),
+        }
+    } else {
+        for (name, config) in structure.configs {
+            match deploy_to(&name, config) {
+                Ok(_) => {}
+                Err(error) => println!("Could not deploy config '{}': {}", name, error),
+            }
+        }
+        Ok(())
     }
-
-    Ok(())
 }
 
-fn deploy_to(name: String, config: Configuration) -> err::Result<()> {
+fn deploy_to(name: &String, config: Configuration) -> err::Result<()> {
     let target = match env::consts::OS {
         "windows" => config.deploy.windows,
         value => {
