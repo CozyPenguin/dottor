@@ -1,6 +1,7 @@
 #![feature(let_chains)]
 
 use std::env;
+use std::path::PathBuf;
 
 use clap::arg;
 use clap::ArgMatches;
@@ -10,6 +11,7 @@ use config::RootConfiguration;
 use err::Error;
 use git2::Repository;
 use glob::glob;
+use glob::GlobError;
 use io_util::check_dir_null_or_empty;
 use io_util::check_not_empty;
 use io_util::check_root_present;
@@ -17,7 +19,6 @@ use io_util::set_current_dir;
 use io_util::write;
 use path_abs::PathAbs;
 use path_abs::PathDir;
-use path_abs::PathFile;
 use path_abs::PathOps;
 use path_abs::PathType;
 use structure::Structure;
@@ -158,7 +159,7 @@ fn deploy(matches: &ArgMatches, structure: Option<Structure>) -> err::Result<()>
     check_root_present()?;
     let mut structure = verify_structure(structure)?;
 
-    let name = matches.value_of("NAME");
+    let name = matches.value_of("name");
 
     if let Some(name) = name {
         let config = structure.configs.remove(name);
@@ -180,8 +181,9 @@ fn deploy(matches: &ArgMatches, structure: Option<Structure>) -> err::Result<()>
 }
 
 fn deploy_to(name: &String, config: Configuration) -> err::Result<()> {
-    let target = match env::consts::OS {
+    let mut target = match env::consts::OS {
         "windows" => config.deploy.windows,
+        "linux" => config.deploy.linux,
         value => {
             return Err(Error::from_string(format!(
                 "Operating system '{value}' is not supported."
@@ -213,8 +215,21 @@ fn deploy_to(name: &String, config: Configuration) -> err::Result<()> {
 
     let pattern = "./**/*";
 
-    let config = PathFile::new(config::CONFIG_PATH)?;
+    let mut excluded_files = config.deploy.exclude;
+    excluded_files.append(&mut target.exclude);
+    let mut excluded_files = excluded_files
+        .iter()
+        .map(|pattern| glob(pattern))
+        .flatten()
+        .flatten()
+        .collect::<Result<Vec<PathBuf>, GlobError>>()
+        .map_err(|_| Error::new("Failed to read exclude patterns"))?
+        .iter()
+        .map(PathType::new)
+        .collect::<Result<Vec<PathType>, path_abs::Error>>()?;
 
+    excluded_files.push(PathType::new(config::CONFIG_PATH)?);
+    // copy files to target
     for entry in glob(&pattern[..])
         .map_err(|_| Error::from_string(format!("Failed to read glob pattern '{}'", pattern)))?
     {
@@ -222,14 +237,14 @@ fn deploy_to(name: &String, config: Configuration) -> err::Result<()> {
             let from = PathType::new(&inner)?;
             let to = target_path.concat(inner)?;
 
-            match from {
-                PathType::File(file) => {
-                    if file != config {
+            if !excluded_files.contains(&from) {
+                match from {
+                    PathType::File(file) => {
                         file.copy(to)?;
                     }
-                }
-                PathType::Dir(dir) => {
-                    PathDir::create_all(dir)?;
+                    PathType::Dir(dir) => {
+                        PathDir::create_all(dir)?;
+                    }
                 }
             }
         } else {

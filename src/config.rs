@@ -62,20 +62,14 @@ pub const ROOT_PATH: &str = "dottor.toml";
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Configuration {
-    pub config: Config,
     pub deploy: Deploy,
     pub dependencies: Dependencies,
 }
 
 #[allow(dead_code)]
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct Config {
-    pub name: Option<String>,
-}
-
-#[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Deploy {
+    #[serde(default)]
     pub exclude: Vec<String>,
     #[serde(default)]
     pub target_require_empty: bool,
@@ -97,6 +91,8 @@ impl Default for Deploy {
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct DeployTarget {
+    #[serde(default)]
+    pub exclude: Vec<String>,
     pub target: String,
     pub target_require_empty: Option<bool>,
 }
