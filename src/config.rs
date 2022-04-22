@@ -1,5 +1,6 @@
 use std::{cmp::Ordering, path::Path};
 
+use path_abs::{PathDir, PathOps};
 use regex::Regex;
 use serde::{
     de::{self, Visitor},
@@ -9,8 +10,8 @@ use serde::{
 use crate::{
     err::{self, Error},
     io_util::{
-        check_dir_null_or_empty, check_root_present, check_valid_dir, create_dir_all, current_dir,
-        prompt_bool, read_to_string, remove_dir_all, write,
+        check_dir_null_or_empty, check_root_present, check_valid_dir, create_dir_all, prompt_bool,
+        read_to_string, remove_dir_all, write,
     },
 };
 
@@ -368,22 +369,21 @@ impl<'de> Deserialize<'de> for Version {
 
 pub const CONFIG_PATH: &str = "dotconfig.toml";
 
-pub fn create_config(name: &Path) -> err::Result<()> {
-    let mut path = current_dir()?;
-    path.push(name);
-    check_dir_null_or_empty(name)?;
-
+pub fn create_config(name: &str) -> err::Result<()> {
+    let path = PathDir::current_dir()?.concat(name)?;
+    check_dir_null_or_empty(&path)?;
     create_dir_all(path.as_path())?;
-    path.push(CONFIG_PATH);
+    let path = path.concat(CONFIG_PATH)?;
     write(
-        path.as_path(),
+        &path,
         toml::to_string_pretty(&Configuration::default())
-            .map_err(|_| Error::new("Could not create configuration file in config."))?,
+            .map_err(|_| Error::new("Could not create configuration file in config."))?
+            .as_bytes(),
     )
 }
 
 pub fn delete_config(name: &str) -> err::Result<()> {
-    check_valid_dir(name)?;
+    check_valid_dir(&PathDir::current_dir()?.concat(name)?)?;
     if prompt_bool(
         "Proceeding will cause the config and all files in the directory to be deleted.",
         false,

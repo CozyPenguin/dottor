@@ -1,9 +1,6 @@
 #![feature(let_chains)]
 
 use std::env;
-use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
 
 use clap::arg;
 use clap::ArgMatches;
@@ -14,12 +11,15 @@ use err::Error;
 use git2::Repository;
 use glob::glob;
 use io_util::check_dir_null_or_empty;
-use io_util::check_empty;
+use io_util::check_not_empty;
 use io_util::check_root_present;
-use io_util::create_dir_all;
-use io_util::current_dir;
 use io_util::set_current_dir;
 use io_util::write;
+use path_abs::PathAbs;
+use path_abs::PathDir;
+use path_abs::PathFile;
+use path_abs::PathOps;
+use path_abs::PathType;
 use structure::Structure;
 
 mod config;
@@ -88,12 +88,13 @@ fn main() {
 
 fn init() -> err::Result<()> {
     // check that we don't accidentally populate an existing directory
-    check_empty(Path::new(""))?;
+    check_not_empty(&PathDir::current_dir()?)?;
     // create the default root configuration
     write(
-        config::ROOT_PATH,
+        &PathAbs::new(config::ROOT_PATH)?,
         toml::to_string_pretty(&RootConfiguration::default())
-            .map_err(|_| Error::new("could not create root configuration"))?,
+            .map_err(|_| Error::new("could not create root configuration"))?
+            .as_bytes(),
     )?;
 
     // initialize a new git repository
@@ -136,7 +137,7 @@ fn config_create(matches: &ArgMatches, structure: Structure) -> err::Result<()> 
             name
         )));
     }
-    config::create_config(name.as_ref())
+    config::create_config(name)
 }
 
 /// deletes a config
@@ -162,8 +163,6 @@ fn deploy(structure: Option<Structure>) -> err::Result<()> {
 }
 
 fn deploy_to(name: String, config: Configuration) -> err::Result<()> {
-    let path = Path::new(&name);
-
     let target = match env::consts::OS {
         "windows" => config.deploy.windows,
         value => {
@@ -173,42 +172,48 @@ fn deploy_to(name: String, config: Configuration) -> err::Result<()> {
         }
     };
 
-    // checks if the directory already has files in it
+    let target_path = PathAbs::new(&shellexpand::tilde(&target.target).into_owned())?;
 
+    // checks if the target directory already has files in it
     match &target.target_require_empty {
         Some(value) => {
             if *value {
-                check_dir_null_or_empty(path)?;
+                check_dir_null_or_empty(&target_path)?;
             }
         }
         None => {
             if config.deploy.target_require_empty {
-                check_dir_null_or_empty(path)?;
+                check_dir_null_or_empty(&target_path)?;
             }
         }
     }
-    if let Some(inner) = &target.target_require_empty && inner == &true {
-        check_dir_null_or_empty(path)?;
-    }
-    create_dir_all(&name)?;
+    // create target
+    PathDir::create_all(&target_path)?;
 
     // switches the directory to the configuration
-    let dir = current_dir()?;
+    let dir = PathDir::current_dir()?;
     set_current_dir(&name)?;
 
     let pattern = "./**/*";
 
-    for entry in
-        glob(&pattern[..]).expect(format!("Failed to read glob pattern '{}'", pattern).as_str())
+    let config = PathFile::new(config::CONFIG_PATH)?;
+
+    for entry in glob(&pattern[..])
+        .map_err(|_| Error::from_string(format!("Failed to read glob pattern '{}'", pattern)))?
     {
         if let Ok(inner) = entry {
-            if !inner.to_str().unwrap().eq(config::CONFIG_PATH) && inner.is_file() {
-                let mut to = PathBuf::from(&target.target);
-                to.push(inner.clone());
-                let to = to.as_path();
-                let inner = inner.as_path();
-                create_dir_all(to.parent().unwrap())?;
-                fs::copy(inner, to).unwrap();
+            let from = PathType::new(&inner)?;
+            let to = target_path.concat(inner)?;
+
+            match from {
+                PathType::File(file) => {
+                    if file != config {
+                        file.copy(to)?;
+                    }
+                }
+                PathType::Dir(dir) => {
+                    PathDir::create_all(dir)?;
+                }
             }
         } else {
             println!("{:?}", entry);

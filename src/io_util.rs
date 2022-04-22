@@ -5,13 +5,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use path_abs::{FileWrite, PathAbs, PathDir, PathFile, PathInfo};
+
 use crate::{
     config,
     err::{self, Error},
 };
 
 pub fn is_root_present() -> err::Result<bool> {
-    file_exists(config::ROOT_PATH)
+    Ok(PathFile::exists(&PathFile::new(config::ROOT_PATH)?))
 }
 
 pub fn check_root_present() -> err::Result<()> {
@@ -31,6 +33,7 @@ pub fn list_root() -> err::Result<ReadDir> {
         .map_err(|_| Error::new("Could not read contents of root directory."))
 }
 
+#[deprecated]
 pub fn current_dir() -> err::Result<PathBuf> {
     env::current_dir().map_err(|_| Error::new("Failed to resolve current directory. "))
 }
@@ -39,58 +42,47 @@ pub fn set_current_dir<P: AsRef<Path>>(path: P) -> err::Result<()> {
     env::set_current_dir(path).map_err(|_| Error::new("Could not change directory."))
 }
 
-pub fn read_dir(dir: &PathBuf) -> err::Result<ReadDir> {
-    dir.read_dir()
-        .map_err(|_| Error::new("Failed to read contents of current directory. "))
-}
-
 /// ensures that the passed directory is empty
-pub fn check_empty(dir: &Path) -> err::Result<()> {
-    let mut path = current_dir()?;
-    path.push(dir);
-    if read_dir(&path)?.next().is_none() {
+pub fn check_not_empty(dir: &PathDir) -> err::Result<()> {
+    if dir.list()?.next().is_none() {
         Ok(())
     } else {
-        Err(Error::from_string(format!("Directory '{}' isn't empty.", dir.display())))
+        Err(Error::from_string(format!(
+            "Directory '{}' isn't empty.",
+            dir.display()
+        )))
     }
 }
 
 /// ensures that the passed directory doesn't exist or is empty
-pub fn check_dir_null_or_empty(dir: &Path) -> err::Result<()> {
-    if is_dir(dir)? {
-        check_empty(dir)?;
+pub fn check_dir_null_or_empty(dir: &PathAbs) -> err::Result<()> {
+    if dir.is_dir() {
+        check_not_empty(&PathDir::new(dir)?)?;
     }
     Ok(())
 }
 
 /// ensures that the passed path is a valid directory
-pub fn check_valid_dir<P: AsRef<Path>>(dir: P) -> err::Result<()> {
-    match is_dir(dir) {
-        Ok(value) => {
-            if value {
-                Ok(())
-            } else {
-                Err(Error::new("Directory not valid."))
-            }
-        }
-        Err(error) => Err(error),
+pub fn check_valid_dir(dir: &PathAbs) -> err::Result<()> {
+    if dir.is_dir() {
+        Ok(())
+    } else {
+        Err(Error::from_string(format!(
+            "'{}' is not a valid directory",
+            dir.display()
+        )))
     }
 }
 
-pub fn is_dir<P: AsRef<Path>>(dir: P) -> err::Result<bool> {
-    let mut path = current_dir()?;
-    path.push(dir);
-    return Ok(path.exists() && path.is_dir());
-}
-
-pub fn file_exists<P: AsRef<Path>>(file: P) -> err::Result<bool> {
-    let mut path = current_dir()?;
-    path.push(file);
-    return Ok(path.exists() && path.is_file());
-}
-
-pub fn write<P: AsRef<Path>, C: AsRef<[u8]>>(path: P, contents: C) -> err::Result<()> {
-    fs::write(path, contents).map_err(|_| Error::from_string(format!("Could not write to path")))
+pub fn write(path: &PathAbs, contents: &[u8]) -> err::Result<()> {
+    let mut write = FileWrite::create(path)?;
+    match write.write(contents) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(Error::from_string(format!(
+            "Could not write to file '{}'",
+            path.display()
+        ))),
+    }
 }
 
 pub fn read_to_string<P: AsRef<Path>>(file: P) -> err::Result<String> {

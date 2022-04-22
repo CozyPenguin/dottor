@@ -31,3 +31,9 @@ impl Display for Error {
         write!(f, "{}", self.message)
     }
 }
+
+impl From<path_abs::Error> for Error {
+    fn from(path: path_abs::Error) -> Self {
+        Error { message: path.to_string() }
+    }
+}
