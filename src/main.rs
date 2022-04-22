@@ -93,7 +93,7 @@ fn init() -> err::Result<()> {
     write(
         &PathAbs::new(config::ROOT_PATH)?,
         toml::to_string_pretty(&RootConfiguration::default())
-            .map_err(|_| Error::new("could not create root configuration"))?
+            .map_err(|_| Error::new("could not create root configuration."))?
             .as_bytes(),
     )?;
 

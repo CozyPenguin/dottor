@@ -5,6 +5,12 @@ authors = ["Carl Schierig"]
 edition = "2021"
 description = "a simple dotfiles manager"
 
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+panic = "abort"
+
 [dependencies]
 
 # command line argument parser

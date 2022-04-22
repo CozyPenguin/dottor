@@ -1,11 +1,10 @@
 use std::{
     env,
-    fs::{self, ReadDir},
     io::{stdin, stdout, Read, Write},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
-use path_abs::{FileWrite, PathAbs, PathDir, PathFile, PathInfo};
+use path_abs::{FileWrite, PathAbs, PathDir, PathFile, PathInfo, FileRead, ListDir};
 
 use crate::{
     config,
@@ -13,7 +12,7 @@ use crate::{
 };
 
 pub fn is_root_present() -> err::Result<bool> {
-    Ok(PathFile::exists(&PathFile::new(config::ROOT_PATH)?))
+    Ok(PathAbs::new(config::ROOT_PATH)?.exists())
 }
 
 pub fn check_root_present() -> err::Result<()> {
@@ -27,15 +26,8 @@ pub fn check_root_present() -> err::Result<()> {
     }
 }
 
-pub fn list_root() -> err::Result<ReadDir> {
-    current_dir()?
-        .read_dir()
-        .map_err(|_| Error::new("Could not read contents of root directory."))
-}
-
-#[deprecated]
-pub fn current_dir() -> err::Result<PathBuf> {
-    env::current_dir().map_err(|_| Error::new("Failed to resolve current directory. "))
+pub fn list_root() -> err::Result<ListDir> {
+    Ok(PathDir::current_dir()?.list()?)
 }
 
 pub fn set_current_dir<P: AsRef<Path>>(path: P) -> err::Result<()> {
@@ -85,17 +77,9 @@ pub fn write(path: &PathAbs, contents: &[u8]) -> err::Result<()> {
     }
 }
 
-pub fn read_to_string<P: AsRef<Path>>(file: P) -> err::Result<String> {
-    fs::read_to_string(file).map_err(|_| Error::new("Could not read file."))
-}
-
-pub fn create_dir_all<P: AsRef<Path>>(dir: P) -> err::Result<()> {
-    fs::create_dir_all(dir).map_err(|_| Error::from_string(format!("Could not create directory")))
-}
-
-pub fn remove_dir_all(dir: &Path) -> err::Result<()> {
-    fs::remove_dir_all(dir)
-        .map_err(|_| Error::from_string(format!("Could not remove directory '{}'", dir.display())))
+pub fn read_to_string(file: &PathFile) -> err::Result<String> {
+    let mut read = FileRead::open(file)?;
+    Ok(read.read_string()?)
 }
 
 pub fn prompt_bool(message: &str, default: bool) -> bool {

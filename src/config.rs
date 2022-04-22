@@ -1,6 +1,6 @@
-use std::{cmp::Ordering, path::Path};
+use std::cmp::Ordering;
 
-use path_abs::{PathDir, PathOps};
+use path_abs::{PathAbs, PathDir, PathFile, PathOps};
 use regex::Regex;
 use serde::{
     de::{self, Visitor},
@@ -10,8 +10,8 @@ use serde::{
 use crate::{
     err::{self, Error},
     io_util::{
-        check_dir_null_or_empty, check_root_present, check_valid_dir, create_dir_all, prompt_bool,
-        read_to_string, remove_dir_all, write,
+        check_dir_null_or_empty, check_root_present, check_valid_dir, prompt_bool, read_to_string,
+        write,
     },
 };
 
@@ -164,7 +164,7 @@ impl Default for SystemDependency {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum VersionSpecifier {
     Any,
     None,
@@ -287,7 +287,30 @@ impl Serialize for Version {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(format!("{}.{}.{}", self.major, self.minor, self.patch).as_str())
+        if self.specifier == VersionSpecifier::Any {
+            serializer.serialize_str("*")
+        } else {
+            serializer.serialize_str(
+                format!(
+                    "{}{}.{}.{}",
+                    match self.specifier {
+                        VersionSpecifier::Any => "*",
+                        VersionSpecifier::None => "",
+                        VersionSpecifier::Equals => "=",
+                        VersionSpecifier::GreaterEquals => ">=",
+                        VersionSpecifier::GreaterThan => ">",
+                        VersionSpecifier::LessEquals => "<=",
+                        VersionSpecifier::LessThan => "<",
+                        VersionSpecifier::MatchMinor => "~",
+                        VersionSpecifier::MatchMajor => "^",
+                    },
+                    self.major,
+                    self.minor,
+                    self.patch
+                )
+                .as_str(),
+            )
+        }
     }
 }
 
@@ -372,7 +395,7 @@ pub const CONFIG_PATH: &str = "dotconfig.toml";
 pub fn create_config(name: &str) -> err::Result<()> {
     let path = PathDir::current_dir()?.concat(name)?;
     check_dir_null_or_empty(&path)?;
-    create_dir_all(path.as_path())?;
+    PathDir::create_all(&path)?;
     let path = path.concat(CONFIG_PATH)?;
     write(
         &path,
@@ -383,32 +406,33 @@ pub fn create_config(name: &str) -> err::Result<()> {
 }
 
 pub fn delete_config(name: &str) -> err::Result<()> {
-    check_valid_dir(&PathDir::current_dir()?.concat(name)?)?;
+    let dir = PathDir::new(name)?;
+    check_valid_dir(&PathAbs::new(&dir)?)?;
     if prompt_bool(
         "Proceeding will cause the config and all files in the directory to be deleted.",
         false,
     ) {
-        remove_dir_all(name.as_ref())
+        Ok(PathDir::remove_all(dir)?)
     } else {
         Ok(())
     }
 }
 
-pub fn read_configuration(file: &Path) -> err::Result<Configuration> {
+pub fn read_configuration(file: &PathFile) -> err::Result<Configuration> {
     let source = read_to_string(file)?;
     let config = toml::from_str(&source[..]).map_err(|_| {
         Error::from_string(format!(
             "Could not parse configuration file '{}'.",
-            file.display()
+            file.as_path().display()
         ))
     })?;
-    return Ok(config);
+    Ok(config)
 }
 
 pub fn read_root_configuration() -> err::Result<RootConfiguration> {
     check_root_present()?;
-    let source = read_to_string(ROOT_PATH)?;
+    let source = read_to_string(&PathFile::new(ROOT_PATH)?)?;
     let config = toml::from_str(&source[..])
         .map_err(|_| Error::new("Could not parse root configuration."))?;
-    return Ok(config);
+    Ok(config)
 }

@@ -1,12 +1,12 @@
 use std::{
     collections::HashMap,
-    fs,
-    path::{Path, PathBuf},
 };
+
+use path_abs::{PathAbs, PathFile, PathInfo, PathOps};
 
 use crate::{
     config::{self, read_configuration, read_root_configuration, Configuration, RootConfiguration},
-    err::{self, Error},
+    err,
     io_util::{is_root_present, list_root},
 };
 
@@ -22,19 +22,22 @@ impl Structure {
             Ok(true) => {
                 let root = read_root_configuration().unwrap();
 
+                let exclude = root
+                    .exclude
+                    .iter()
+                    .map(PathAbs::new)
+                    .into_iter()
+                    .collect::<Result<Vec<PathAbs>, path_abs::Error>>()?;
+
                 let mut configs = HashMap::new();
+
                 for path in list_root()? {
-                    let path = path.map_err(|_| Error::new("Invalid path encountered"))?;
-                    if Path::is_dir(&path.path())
-                        && !root.exclude.iter().any(|p| {
-                            fs::canonicalize(PathBuf::from(p)).unwrap()
-                                == fs::canonicalize(path.path()).unwrap()
-                        })
-                    {
-                        let mut path = path.path();
-                        let key = path.file_name().unwrap().to_str().unwrap().to_string();
-                        path.push(config::CONFIG_PATH);
-                        let config = read_configuration(&path)?;
+                    let path = path?;
+                    let key = path.file_name().unwrap().to_str().unwrap().to_string();
+
+                    if path.is_dir() && !exclude.contains(&path.to_owned().into()) {
+                        let config =
+                            read_configuration(&PathFile::new(path.concat(config::CONFIG_PATH)?)?)?;
                         configs.insert(key, config);
                     }
                 }
