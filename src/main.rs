@@ -217,7 +217,6 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                         let to_contents = to.read_string();
 
                         if let (Ok(from_contents), Ok(to_contents)) = (from_contents, to_contents) {
-                            
                             let diff = TextDiff::from_lines(&to_contents, &from_contents);
 
                             // compute the width of the line numbers

@@ -85,5 +85,9 @@ pub fn prompt_bool(message: &str, default: bool) -> bool {
 
     let mut input = String::new();
     stdin().read_line(&mut input).unwrap();
-    return input.to_lowercase().trim() == "y";
+    if input.trim().len() == 0 {
+        default
+    } else {
+        input.to_lowercase().trim() == "y"
+    }
 }
