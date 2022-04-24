@@ -7,9 +7,6 @@ description = "a simple dotfiles manager"
 
 [profile.release]
 strip = true
-lto = true
-codegen-units = 1
-panic = "abort"
 
 [dependencies]
 
@@ -22,7 +19,9 @@ serde = { version = "1.0.136", features = ["derive"] }
 regex = "1.5.5"
 lazy_static = "1.4.0"
 path_abs = "0.5.1"
-glob = "0.3.0"
+globset = "0.4.8"
 shellexpand = "2.1.0"
+# diffing library for comparing changes when pulling
+similar = { version = "2.1.0", features = ["unicode", "inline"] }
 # git integration
 git2 = "0.14.2"

@@ -1,10 +1,6 @@
-use std::{
-    env,
-    io::{stdin, stdout, Read, Write},
-    path::Path,
-};
+use std::io::{stdin, stdout, Write};
 
-use path_abs::{FileWrite, PathAbs, PathDir, PathFile, PathInfo, FileRead, ListDir};
+use path_abs::{FileRead, FileWrite, ListDir, PathAbs, PathDir, PathFile, PathInfo};
 
 use crate::{
     config,
@@ -28,10 +24,6 @@ pub fn check_root_present() -> err::Result<()> {
 
 pub fn list_root() -> err::Result<ListDir> {
     Ok(PathDir::current_dir()?.list()?)
-}
-
-pub fn set_current_dir<P: AsRef<Path>>(path: P) -> err::Result<()> {
-    env::set_current_dir(path).map_err(|_| Error::new("Could not change directory."))
 }
 
 /// ensures that the passed directory is empty
@@ -91,9 +83,7 @@ pub fn prompt_bool(message: &str, default: bool) -> bool {
 
     stdout().flush().ok();
 
-    let input = stdin().bytes().next().and_then(|result| result.ok());
-    if let Some(char) = input {
-        return char == b'y' || char == b'Y';
-    }
-    return false;
+    let mut input = String::new();
+    stdin().read_line(&mut input).unwrap();
+    return input.to_lowercase().trim() == "y";
 }
