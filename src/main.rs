@@ -1,5 +1,6 @@
 #![feature(let_chains)]
 
+use std::collections::HashSet;
 use std::env;
 
 use clap::arg;
@@ -172,6 +173,7 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
     let config = structure.configs.remove(&String::from(name));
     match config {
         Some(config) => {
+            // get correct deploy and pull configuration
             let (deploy_target, pull_from) = match env::consts::OS {
                 "windows" => (config.deploy.windows, config.pull.windows),
                 "linux" => (config.deploy.linux, config.pull.windows),
@@ -181,11 +183,12 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                     )))
                 }
             };
-            let from = PathDir::new(
+
+            let from_dir = PathDir::new(
                 shellexpand::tilde(&pull_from.from.unwrap_or(deploy_target.target)).into_owned(),
             )?;
-            let config_dir = PathDir::new(name)?;
-            let dotconfig = config_dir.concat(config::CONFIG_PATH)?;
+            let to_dir = PathDir::new(name)?;
+            let dotconfig = to_dir.concat(config::CONFIG_PATH)?;
 
             // resolve exclude glob patterns
             let mut exclude_patterns = GlobSetBuilder::new();
@@ -197,21 +200,28 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
             });
             let exclude_patterns = exclude_patterns.build().unwrap();
 
-            for path in get_paths_in(&from, "**/*")? {
-                let relative = path
-                    .strip_prefix(&from)
-                    .map_err(|_| Error::new("could not resolve relative path"))?;
-                let to = config_dir.concat(&relative)?;
+            let from_paths = get_paths_in(&from_dir, "**/*")?;
+            let to_paths = get_paths_in(&to_dir, "**/*")?;
 
-                if !exclude_patterns.is_match(&relative) {
+            // pull files from deployed configuration
+            for from_abs in from_paths {
+                // resolve relative path
+                let path_rel = from_abs
+                    .strip_prefix(&from_dir)
+                    .map_err(|_| Error::new("could not resolve relative path"))?;
+                // get destination
+                let to_abs = to_dir.concat(&path_rel)?;
+
+                if !exclude_patterns.is_match(&path_rel) {
                     // ensure that we aren't accidentally overwriting the dotconfig
-                    if to == dotconfig {
+                    if to_abs == dotconfig {
                         return Err(Error::new("Trying to overwrite dotconfig.toml configuration file. Please add 'dotconfig.toml' to your excludes in the pull configuration."));
                     }
 
-                    if to.exists() {
-                        let mut from = FileRead::open(&path)?;
-                        let mut to = FileRead::open(&to)?;
+                    // if the file exists, we create a diff
+                    if to_abs.exists() {
+                        let mut from = FileRead::open(&from_abs)?;
+                        let mut to = FileRead::open(&to_abs)?;
 
                         let from_contents = from.read_string();
                         let to_contents = to.read_string();
@@ -238,7 +248,7 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                             println!(
                                 "{: ^width_left$}\u{2502} {}",
                                 " ",
-                                relative.display(),
+                                path_rel.display(),
                                 width_left = width_left
                             );
                             println!(
@@ -315,11 +325,13 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                             println!(
                                 "{: ^width_left$}\x1b[36m~\x1b[0m \u{2502} {}",
                                 " ",
-                                relative.display(),
+                                path_rel.display(),
                                 width_left = 2
                             );
                         }
-                    } else if from.exists() && !to.exists() {
+                    }
+                    // file doesn't exist yet
+                    else {
                         // print addition
                         let width_left = 4;
                         let total_width = 80 - width_left - 1;
@@ -332,15 +344,15 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                         println!(
                             "{: ^width_left$}\x1b[32m+\x1b[0m \u{2502} {}",
                             " ",
-                            relative.display(),
+                            path_rel.display(),
                             width_left = 2
                         );
                     }
 
                     // copy the file
                     if prompt_bool("Do you want to continue? ", true) {
-                        PathDir::create_all(&to.parent()?)?;
-                        path.copy(to)?;
+                        PathDir::create_all(&to_abs.parent()?)?;
+                        from_abs.copy(to_abs)?;
                     }
                 }
             }
