@@ -1,28 +1,16 @@
-[deploy]
+[target]
 exclude = [] # an array of globs which aren't exported
-target_require_empty = true # if true, the target directory has to be empty
+require_empty = false # if true, the target directory has to be empty
 
-    [deploy.windows]
+    [target.windows]
     target = '' # The target directory to which the files should be copied
     exclude = [] # additional excluded files when deploying on windows
     # target_require_empty = true # defaults to deploy.target_require_empty
 
-    [deploy.linux]
+    [target.linux]
     target = '' # The target directory to which the files should be copied
     exclude = [] # additional excluded files when deploying on linux
     # target_require_empty = true # defaults to deploy.target_require_empty
-
-## settings for pulling local changes into the config
-[pull]
-exclude = [] # an array of globs which aren't pulled
-
-    [pull.windows]
-    exclude = [] # an array of globs which aren't pulled
-    # from = '' # defaults to the target in the deploy configuration
-
-    [pull.linux]
-    exclude = [] # an array of globs which aren't pulled
-    # from = '' # defaults to the target in the deploy configuration
 
 ## Specify dependencies on other configurations or programs that are required for this configuration
 [dependencies]

@@ -174,9 +174,9 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
     match config {
         Some(config) => {
             // get correct deploy and pull configuration
-            let (deploy_target, pull_from) = match env::consts::OS {
-                "windows" => (config.deploy.windows, config.pull.windows),
-                "linux" => (config.deploy.linux, config.pull.windows),
+            let target = match env::consts::OS {
+                "windows" => config.target.windows,
+                "linux" => config.target.linux,
                 value => {
                     return Err(Error::from_string(format!(
                         "Operating system '{value}' is not supported."
@@ -184,18 +184,16 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                 }
             };
 
-            let from_dir = PathDir::new(
-                shellexpand::tilde(&pull_from.from.unwrap_or(deploy_target.target)).into_owned(),
-            )?;
+            let from_dir = PathDir::new(shellexpand::tilde(&target.directory).into_owned())?;
             let to_dir = PathDir::new(name)?;
             let dotconfig = to_dir.concat(config::CONFIG_PATH)?;
 
             // resolve exclude glob patterns
             let mut exclude_patterns = GlobSetBuilder::new();
-            config.pull.exclude.iter().for_each(|pattern| {
+            config.target.exclude.iter().for_each(|pattern| {
                 exclude_patterns.add(Glob::new(pattern.as_str()).unwrap());
             });
-            pull_from.exclude.iter().for_each(|pattern| {
+            target.exclude.iter().for_each(|pattern| {
                 exclude_patterns.add(Glob::new(pattern.as_str()).unwrap());
             });
             let exclude_patterns = exclude_patterns.build().unwrap();
@@ -215,7 +213,7 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                 if !exclude_patterns.is_match(&path_rel) {
                     // ensure that we aren't accidentally overwriting the dotconfig
                     if to_abs == dotconfig {
-                        return Err(Error::new("Trying to overwrite dotconfig.toml configuration file. Please add 'dotconfig.toml' to your excludes in the pull configuration."));
+                        return Err(Error::new("Trying to overwrite dotconfig.toml configuration file. Please add 'dotconfig.toml' to your excludes in the target configuration."));
                     }
 
                     // if the file exists, we create a diff
@@ -393,8 +391,8 @@ fn deploy(matches: &ArgMatches, structure: Option<Structure>) -> err::Result<()>
 
 fn deploy_to(name: &String, config: Configuration) -> err::Result<()> {
     let target = match env::consts::OS {
-        "windows" => config.deploy.windows,
-        "linux" => config.deploy.linux,
+        "windows" => config.target.windows,
+        "linux" => config.target.linux,
         value => {
             return Err(Error::from_string(format!(
                 "Operating system '{value}' is not supported."
@@ -402,17 +400,17 @@ fn deploy_to(name: &String, config: Configuration) -> err::Result<()> {
         }
     };
 
-    let target_path = PathAbs::new(&shellexpand::tilde(&target.target).into_owned())?;
+    let target_path = PathAbs::new(&shellexpand::tilde(&target.directory).into_owned())?;
 
     // checks if the target directory already has files in it
-    match &target.target_require_empty {
+    match &target.require_empty {
         Some(value) => {
             if *value {
                 check_dir_null_or_empty(&target_path)?;
             }
         }
         None => {
-            if config.deploy.target_require_empty {
+            if config.target.require_empty {
                 check_dir_null_or_empty(&target_path)?;
             }
         }
@@ -425,7 +423,7 @@ fn deploy_to(name: &String, config: Configuration) -> err::Result<()> {
     let dotconfig = PathFile::new(config_dir.concat(config::CONFIG_PATH)?)?;
 
     let mut exclude_patterns = GlobSetBuilder::new();
-    config.deploy.exclude.iter().for_each(|pattern| {
+    config.target.exclude.iter().for_each(|pattern| {
         exclude_patterns.add(Glob::new(pattern.as_str()).unwrap());
     });
     target.exclude.iter().for_each(|pattern| {

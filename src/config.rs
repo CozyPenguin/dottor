@@ -62,28 +62,26 @@ pub const ROOT_PATH: &str = "dottor.toml";
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Configuration {
-    pub deploy: Deploy,
-    #[serde(default)]
-    pub pull: Pull,
+    pub target: Target,
     pub dependencies: Dependencies,
 }
 
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug)]
-pub struct Deploy {
+pub struct Target {
     #[serde(default)]
     pub exclude: Vec<String>,
     #[serde(default)]
-    pub target_require_empty: bool,
-    pub windows: DeployTarget,
-    pub linux: DeployTarget,
+    pub require_empty: bool,
+    pub windows: SingleTarget,
+    pub linux: SingleTarget,
 }
 
-impl Default for Deploy {
+impl Default for Target {
     fn default() -> Self {
         Self {
             exclude: Default::default(),
-            target_require_empty: true,
+            require_empty: false,
             windows: Default::default(),
             linux: Default::default(),
         }
@@ -92,28 +90,11 @@ impl Default for Deploy {
 
 #[allow(dead_code)]
 #[derive(Serialize, Deserialize, Debug, Default)]
-pub struct DeployTarget {
+pub struct SingleTarget {
     #[serde(default)]
     pub exclude: Vec<String>,
-    pub target: String,
-    pub target_require_empty: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct Pull {
-    #[serde(default)]
-    pub exclude: Vec<String>, 
-    #[serde(default)]
-    pub windows: PullConfig,
-    #[serde(default)]
-    pub linux: PullConfig
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct PullConfig {
-    #[serde(default)]
-    pub exclude: Vec<String>, 
-    pub from: Option<String>,
+    pub directory: String,
+    pub require_empty: Option<bool>,
 }
 
 #[allow(dead_code)]
@@ -435,10 +416,10 @@ pub fn delete_config(name: &str) -> err::Result<()> {
 
 pub fn read_configuration(file: &PathFile) -> err::Result<Configuration> {
     let source = read_to_string(file)?;
-    let config = toml::from_str(&source[..]).map_err(|_| {
+    let config = toml::from_str(&source[..]).map_err(|err| {
         Error::from_string(format!(
-            "Could not parse configuration file '{}'.",
-            file.as_path().display()
+            "Could not parse configuration file '{}'. Reason: {}",
+            file.as_path().display(), &err
         ))
     })?;
     Ok(config)
