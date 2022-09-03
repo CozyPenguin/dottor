@@ -1,6 +1,5 @@
 #![feature(let_chains)]
 
-use std::collections::HashSet;
 use std::env;
 
 use clap::arg;
