@@ -7,6 +7,8 @@ description = "a simple dotfiles manager"
 
 [profile.release]
 strip = true
+lto = true
+codegen-units = 1
 
 [dependencies]
 
