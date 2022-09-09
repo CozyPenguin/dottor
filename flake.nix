@@ -3,7 +3,7 @@
 
   outputs = { self, nixpkgs, flake-utils }: {
     overlay = final: prev: {
-      dottor = self.packages.dottor;
+      dottor = self.packages."${prev.system}".dottor;
     };
   } // (flake-utils.lib.eachDefaultSystem (system:
     let pkgs = import nixpkgs { inherit system; }; in rec {
