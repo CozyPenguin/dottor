@@ -1,6 +1,11 @@
 {
   description = "Flake for dottor";
 
+  inputs = {
+    nixpkgs.url = github:nixos/nixpkgs;
+    flake-utils.url = github:numtide/flake-utils;
+  };
+
   outputs = { self, nixpkgs, flake-utils }: {
     overlay = final: prev: {
       dottor = self.packages."${prev.system}".dottor;
