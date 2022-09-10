@@ -380,9 +380,9 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                     // check if file was deleted
                     if !from_abs.exists() {
                         print_file_name(path_rel, "\x1b[31m-\x1b[0m", 5, 80, false);
-                    }
-                    if prompt_bool("Do you want to continue? ", true) {
-                        to_abs.remove()?;
+                        if prompt_bool("Do you want to continue? ", true) {
+                            to_abs.remove()?;
+                        }
                     }
                 }
             }
