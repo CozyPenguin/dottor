@@ -136,7 +136,6 @@ fn config(matches: &ArgMatches, structure: Option<Structure>) -> err::Result<()>
         Some((subcommands::config::CREATE, sub_matches)) => config_create(sub_matches, structure),
         Some((subcommands::config::DELETE, sub_matches)) => config_delete(sub_matches, structure),
         Some((subcommands::config::PULL, sub_matches)) => config_pull(sub_matches, structure),
-        None => config_create(matches, structure), // if no subcommand was provided, create is implied (like e.g. git branch)
         _ => Err(err::Error::new("Invalid subcommand")),
     }
 }

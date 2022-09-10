@@ -3,15 +3,19 @@
 
   inputs = {
     nixpkgs.url = github:nixos/nixpkgs;
+    fenix = {
+      url = github:nix-community/fenix;
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     flake-utils.url = github:numtide/flake-utils;
   };
 
-  outputs = { self, nixpkgs, flake-utils }: {
+  outputs = { self, nixpkgs, fenix, flake-utils }: {
     overlay = final: prev: {
       dottor = self.packages."${prev.system}".dottor;
     };
   } // (flake-utils.lib.eachDefaultSystem (system:
-    let pkgs = import nixpkgs { inherit system; }; in rec {
+    let pkgs = import nixpkgs { inherit system; overlays = [ fenix.overlay ]; }; in rec {
       packages.dottor = pkgs.rustPlatform.buildRustPackage rec {
         pname = "dottor";
         version = "0.1.0";
@@ -32,6 +36,21 @@
       defaultPackage = packages.dottor;
       apps.dottor = flake-utils.lib.mkApp { drv = packages.dottor; };
       defaultApp = apps.dottor;
+
+      devShell = pkgs.mkShell {
+        packages = [ 
+          (pkgs.fenix.complete.withComponents [
+            "cargo"
+            "rust-src"
+            "rustc"
+            "rustfmt"
+          ])
+          pkgs.rust-analyzer-nightly
+        ];
+        inputsFrom = [
+          packages.dottor
+        ];
+      };
     }
   ));
 }
