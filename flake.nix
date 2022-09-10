@@ -35,7 +35,7 @@
       };
       defaultPackage = packages.dottor;
       apps.dottor = flake-utils.lib.mkApp { drv = packages.dottor; };
-      defaultApp = apps.dottor;
+      apps.default = apps.dottor;
 
       devShell = pkgs.mkShell {
         packages = [ 

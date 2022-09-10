@@ -1,6 +1,7 @@
 // #![feature(let_chains)]
 
 use std::env;
+use std::path::Path;
 
 use clap::arg;
 use clap::ArgMatches;
@@ -166,6 +167,52 @@ fn config_delete(matches: &ArgMatches, structure: Structure) -> err::Result<()> 
 
 /// pull local changes from a config into the repository
 fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()> {
+    fn print_file_name(
+        name: &Path,
+        modifier_symbol: &'static str,
+        separator_pos: usize,
+        total_width: usize,
+        continue_table: bool,
+    ) {
+        println!(
+            "{char:\u{2550}^width_left$}\u{2564}{char:\u{2550}^width_right$}",
+            char = "\u{2550}",
+            width_left = separator_pos - 1,
+            width_right = total_width - separator_pos
+        );
+        println!(
+            "{: ^width_left$}{} \u{2502} {}",
+            " ",
+            modifier_symbol,
+            name.display(),
+            width_left = separator_pos - 3
+        );
+
+        if continue_table {
+            print_separator_line(separator_pos, total_width);
+        } else {
+            print_end_line(separator_pos, total_width);
+        }
+    }
+    
+    fn print_separator_line(separator_pos: usize, total_width: usize) {
+        println!(
+            "{char:\u{2500}^ln_width$}\u{253C}{char:\u{2500}^total_width$}",
+            char = "\u{2500}",
+            ln_width = separator_pos - 1,
+            total_width = total_width - separator_pos
+        );
+    }
+    
+    fn print_end_line(separator_pos: usize, total_width: usize) {
+        println!(
+            "{char:\u{2500}^ln_width$}\u{2534}{char:\u{2500}^total_width$}",
+            char = "\u{2500}",
+            ln_width = separator_pos - 1,
+            total_width = total_width - separator_pos
+        );
+    }
+
     let name = matches.value_of("NAME").expect("name not provided");
 
     let config = structure.configs.remove(&String::from(name));
@@ -200,6 +247,12 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
             let to_paths = get_paths_in(&to_dir, "**/*")?;
 
             // pull files from deployed configuration
+            // there are four cases for this:
+            //  1) from exists, to exists && unchanged -> do nothing
+            //  2) from exists, to exists && modified -> display diff
+            //  3) from exists, to doesn't exist -> display addition
+            //  4) from doesn't exist, to exists -> display removal
+
             for from_abs in from_paths {
                 // resolve relative path
                 let path_rel = from_abs
@@ -214,7 +267,7 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                         return Err(Error::new("Trying to overwrite dotconfig.toml configuration file. Please add 'dotconfig.toml' to your excludes in the target configuration."));
                     }
 
-                    // if the file exists, we create a diff
+                    // if the file exists, we check if any changes were made to it
                     if to_abs.exists() {
                         let mut from = FileRead::open(&from_abs)?;
                         let mut to = FileRead::open(&to_abs)?;
@@ -223,6 +276,12 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                         let to_contents = to.read_string();
 
                         if let (Ok(from_contents), Ok(to_contents)) = (from_contents, to_contents) {
+                            // check for case 1) files are the same
+                            if from_contents == to_contents {
+                                continue;
+                            }
+
+                            // case 2) compute diff
                             let diff = TextDiff::from_lines(&to_contents, &from_contents);
 
                             // compute the width of the line numbers
@@ -231,39 +290,17 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                                 to_contents.lines().count(),
                             )
                                 as f32)) as usize;
-                            let width_left = ln_width * 2 + 3;
-                            let total_width = 80 - width_left - 1;
+                            let separator_pos = ln_width * 2 + 4;
+                            let total_width = 80;
 
                             // print the file name
-                            println!(
-                                "{char:\u{2550}^ln_width$}\u{2564}{char:\u{2550}^total_width$}",
-                                char = "\u{2550}",
-                                ln_width = width_left,
-                                total_width = total_width
-                            );
-                            println!(
-                                "{: ^width_left$}\u{2502} {}",
-                                " ",
-                                path_rel.display(),
-                                width_left = width_left
-                            );
-                            println!(
-                                "{char:\u{2500}^ln_width$}\u{253C}{char:\u{2500}^total_width$}",
-                                char = "\u{2500}",
-                                ln_width = width_left,
-                                total_width = total_width
-                            );
+                            print_file_name(path_rel, "\x1b[36m~\x1b[0m", separator_pos, total_width, true);
 
                             // adapted from https://github.com/mitsuhiko/similar/blob/main/examples/terminal-inline.rs
                             for (idx, group) in diff.grouped_ops(2).iter().enumerate() {
                                 // print separating line between changes
                                 if idx > 0 {
-                                    println!(
-                                        "{char:\u{2500}^ln_width$}\u{253C}{char:\u{2500}^total_width$}",
-                                        char="\u{2500}",
-                                        ln_width = width_left,
-                                        total_width = total_width
-                                    );
+                                    print_separator_line(separator_pos, total_width);
                                 }
 
                                 // iterate over changes
@@ -308,47 +345,44 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
                                     }
                                 }
                             }
+                            
+                            // print closing line
+                            print_end_line(separator_pos, total_width);
                         } else {
                             // print modification if file could not be read
-                            let width_left = 4;
-                            let total_width = 80 - width_left - 1;
-                            println!(
-                                "{char:\u{2550}^ln_width$}\u{2564}{char:\u{2550}^total_width$}",
-                                char = "\u{2550}",
-                                ln_width = width_left,
-                                total_width = total_width
-                            );
-                            println!(
-                                "{: ^width_left$}\x1b[36m~\x1b[0m \u{2502} {}",
-                                " ",
-                                path_rel.display(),
-                                width_left = 2
-                            );
+                            print_file_name(path_rel, "\x1b[36m~\x1b[0m", 5, 80, false);
                         }
                     }
-                    // file doesn't exist yet
+                    // case 3) file doesn't exist yet
                     else {
                         // print addition
-                        let width_left = 4;
-                        let total_width = 80 - width_left - 1;
-                        println!(
-                            "{char:\u{2550}^ln_width$}\u{2564}{char:\u{2550}^total_width$}",
-                            char = "\u{2550}",
-                            ln_width = width_left,
-                            total_width = total_width
-                        );
-                        println!(
-                            "{: ^width_left$}\x1b[32m+\x1b[0m \u{2502} {}",
-                            " ",
-                            path_rel.display(),
-                            width_left = 2
-                        );
+                        print_file_name(path_rel, "\x1b[32m+\x1b[0m", 5, 80, false);
                     }
 
                     // copy the file
                     if prompt_bool("Do you want to continue? ", true) {
                         PathDir::create_all(&to_abs.parent()?)?;
                         from_abs.copy(to_abs)?;
+                    }
+                }
+            }
+            
+            // check for case 4) file was deleted
+            for to_abs in to_paths {
+                // resolve relative path
+                let path_rel = to_abs
+                    .strip_prefix(&to_dir)
+                    .map_err(|_| Error::new("could not resolve relative path"))?;
+                // get source
+                let from_abs = from_dir.concat(&path_rel)?;
+
+                if !exclude_patterns.is_match(&path_rel) && PathAbs::from(to_abs.clone()) != dotconfig {
+                    // check if file was deleted
+                    if !from_abs.exists() {
+                        print_file_name(path_rel, "\x1b[31m-\x1b[0m", 5, 80, false);
+                    }
+                    if prompt_bool("Do you want to continue? ", true) {
+                        to_abs.remove()?;
                     }
                 }
             }
