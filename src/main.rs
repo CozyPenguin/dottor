@@ -1,5 +1,3 @@
-// #![feature(let_chains)]
-
 use std::env;
 use std::path::Path;
 
@@ -36,11 +34,11 @@ mod structure;
 
 mod subcommands {
     pub const CONFIG: &str = "config";
-    pub const DEPLOY: &str = "deploy";
     pub const INIT: &str = "init";
     pub mod config {
         pub const CREATE: &str = "create";
         pub const DELETE: &str = "delete";
+        pub const DEPLOY: &str = "deploy";
         pub const PULL: &str = "pull";
     }
 }
@@ -69,19 +67,23 @@ fn main() {
                         .arg(arg!(<NAME> "The name of the configuration")),
                 )
                 .subcommand(
+                    Command::new(subcommands::config::DEPLOY)
+                        .about("Deploy your configurations to the system")
+                        .arg_required_else_help(true)
+                        .arg(arg!(<NAME> "The name of the configuration"))
+                        .arg(arg!(-a --all "Deploy all configurations")),
+                )
+                .subcommand(
                     Command::new(subcommands::config::PULL)
                         .about(
                             "Pull changes from the deployed configuration into the dotfiles repo",
                         )
                         .arg_required_else_help(true)
-                        .arg(arg!(<NAME> "The name of the configuration")),
+                        .arg(arg!(<NAME> "The name of the configuration"))
+                        .arg(arg!(-a --all "Pull in changes from all configurations"))
+                        .arg(arg!(-f --force "Don't ask for confirmation when pulling in changes")),
                 )
                 .arg(arg!([NAME] "The name of the configuration")),
-        )
-        .subcommand(
-            Command::new(subcommands::DEPLOY)
-                .about("Deploy your configurations to the system")
-                .arg(arg!([name] "The name of the configuration")),
         )
         .subcommand(
             Command::new(subcommands::INIT)
@@ -92,7 +94,6 @@ fn main() {
     if let Err(error) = match matches.subcommand() {
         Some((subcommands::INIT, _)) => init(),
         Some((subcommands::CONFIG, sub_matches)) => config(sub_matches, structure),
-        Some((subcommands::DEPLOY, sub_matches)) => deploy(sub_matches, structure),
         _ => Ok(()),
     } {
         eprintln!("{} Aborting!", error);
@@ -136,6 +137,7 @@ fn config(matches: &ArgMatches, structure: Option<Structure>) -> err::Result<()>
     match matches.subcommand() {
         Some((subcommands::config::CREATE, sub_matches)) => config_create(sub_matches, structure),
         Some((subcommands::config::DELETE, sub_matches)) => config_delete(sub_matches, structure),
+        Some((subcommands::config::DEPLOY, sub_matches)) => config_deploy(sub_matches, structure),
         Some((subcommands::config::PULL, sub_matches)) => config_pull(sub_matches, structure),
         _ => Err(err::Error::new("Invalid subcommand")),
     }
@@ -162,11 +164,45 @@ fn config_delete(matches: &ArgMatches, structure: Structure) -> err::Result<()> 
             name
         )));
     }
-    config::delete_config(name)
+
+    if prompt_bool("Do you want to delete this configuration? ", false) {
+        config::delete_config(name)
+    } else {
+        Ok(())
+    }
+}
+
+fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()> {
+    let name = matches.value_of("name");
+    let all = matches.is_present("all");
+    let force = matches.is_present("force");
+
+    if let Some(name) = name {
+        if all {
+            return Err(Error::new("You cannot use the all flag in combination with a specific configuration. Try removing \"--all\" or the configuration name."));
+        }
+        let config = structure.configs.remove(name);
+        match config {
+            Some(config) => pull_single(&String::from(name), config, force),
+            None => Err(Error::from_string(format!(
+                "Config '{name}' does not exist."
+            ))),
+        }
+    } else if all {
+        for (name, config) in structure.configs {
+            match pull_single(&name, config, force) {
+                Ok(_) => {}
+                Err(error) => println!("Could not pull config '{}': {}", name, error),
+            }
+        }
+        Ok(())
+    } else {
+        Err(Error::new("No configurations matched the query."))
+    }
 }
 
 /// pull local changes from a config into the repository
-fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()> {
+fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result<()> {
     fn print_file_name(
         name: &Path,
         modifier_symbol: &'static str,
@@ -194,7 +230,7 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
             print_end_line(separator_pos, total_width);
         }
     }
-    
+
     fn print_separator_line(separator_pos: usize, total_width: usize) {
         println!(
             "{char:\u{2500}^ln_width$}\u{253C}{char:\u{2500}^total_width$}",
@@ -203,7 +239,7 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
             total_width = total_width - separator_pos
         );
     }
-    
+
     fn print_end_line(separator_pos: usize, total_width: usize) {
         println!(
             "{char:\u{2500}^ln_width$}\u{2534}{char:\u{2500}^total_width$}",
@@ -213,215 +249,213 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
         );
     }
 
-    let name = matches.value_of("NAME").expect("name not provided");
+    // get correct deploy and pull configuration
+    let target = match env::consts::OS {
+        "windows" => config.target.windows,
+        "linux" => config.target.linux,
+        value => {
+            return Err(Error::from_string(format!(
+                "Operating system '{value}' is not supported."
+            )))
+        }
+    };
 
-    let config = structure.configs.remove(&String::from(name));
-    match config {
-        Some(config) => {
-            // get correct deploy and pull configuration
-            let target = match env::consts::OS {
-                "windows" => config.target.windows,
-                "linux" => config.target.linux,
-                value => {
-                    return Err(Error::from_string(format!(
-                        "Operating system '{value}' is not supported."
-                    )))
-                }
-            };
+    let from_dir = PathDir::new(shellexpand::tilde(&target.directory).into_owned())?;
+    let to_dir = PathDir::new(name)?;
+    let dotconfig = to_dir.concat(config::CONFIG_PATH)?;
 
-            let from_dir = PathDir::new(shellexpand::tilde(&target.directory).into_owned())?;
-            let to_dir = PathDir::new(name)?;
-            let dotconfig = to_dir.concat(config::CONFIG_PATH)?;
+    // resolve exclude glob patterns
+    let mut exclude_patterns = GlobSetBuilder::new();
+    config.target.exclude.iter().for_each(|pattern| {
+        exclude_patterns.add(Glob::new(pattern.as_str()).unwrap());
+    });
+    target.exclude.iter().for_each(|pattern| {
+        exclude_patterns.add(Glob::new(pattern.as_str()).unwrap());
+    });
+    let exclude_patterns = exclude_patterns.build().unwrap();
 
-            // resolve exclude glob patterns
-            let mut exclude_patterns = GlobSetBuilder::new();
-            config.target.exclude.iter().for_each(|pattern| {
-                exclude_patterns.add(Glob::new(pattern.as_str()).unwrap());
-            });
-            target.exclude.iter().for_each(|pattern| {
-                exclude_patterns.add(Glob::new(pattern.as_str()).unwrap());
-            });
-            let exclude_patterns = exclude_patterns.build().unwrap();
+    let from_paths = get_paths_in(&from_dir, "**/*")?;
+    let to_paths = get_paths_in(&to_dir, "**/*")?;
 
-            let from_paths = get_paths_in(&from_dir, "**/*")?;
-            let to_paths = get_paths_in(&to_dir, "**/*")?;
+    // pull files from deployed configuration
+    // there are four cases for this:
+    //  1) from exists, to exists && unchanged -> do nothing
+    //  2) from exists, to exists && modified -> display diff
+    //  3) from exists, to doesn't exist -> display addition
+    //  4) from doesn't exist, to exists -> display removal
 
-            // pull files from deployed configuration
-            // there are four cases for this:
-            //  1) from exists, to exists && unchanged -> do nothing
-            //  2) from exists, to exists && modified -> display diff
-            //  3) from exists, to doesn't exist -> display addition
-            //  4) from doesn't exist, to exists -> display removal
+    for from_abs in from_paths {
+        // resolve relative path
+        let path_rel = from_abs
+            .strip_prefix(&from_dir)
+            .map_err(|_| Error::new("could not resolve relative path"))?;
+        // get destination
+        let to_abs = to_dir.concat(&path_rel)?;
 
-            for from_abs in from_paths {
-                // resolve relative path
-                let path_rel = from_abs
-                    .strip_prefix(&from_dir)
-                    .map_err(|_| Error::new("could not resolve relative path"))?;
-                // get destination
-                let to_abs = to_dir.concat(&path_rel)?;
+        if !exclude_patterns.is_match(&path_rel) {
+            // ensure that we aren't accidentally overwriting the dotconfig
+            if to_abs == dotconfig {
+                return Err(Error::new("Trying to overwrite dotconfig.toml configuration file. Please add 'dotconfig.toml' to your excludes in the target configuration."));
+            }
 
-                if !exclude_patterns.is_match(&path_rel) {
-                    // ensure that we aren't accidentally overwriting the dotconfig
-                    if to_abs == dotconfig {
-                        return Err(Error::new("Trying to overwrite dotconfig.toml configuration file. Please add 'dotconfig.toml' to your excludes in the target configuration."));
+            // if the file exists, we check if any changes were made to it
+            if to_abs.exists() {
+                let mut from = FileRead::open(&from_abs)?;
+                let mut to = FileRead::open(&to_abs)?;
+
+                let from_contents = from.read_string();
+                let to_contents = to.read_string();
+
+                if let (Ok(from_contents), Ok(to_contents)) = (from_contents, to_contents) {
+                    // check for case 1) files are the same
+                    if from_contents == to_contents {
+                        continue;
                     }
 
-                    // if the file exists, we check if any changes were made to it
-                    if to_abs.exists() {
-                        let mut from = FileRead::open(&from_abs)?;
-                        let mut to = FileRead::open(&to_abs)?;
+                    // case 2) compute diff
+                    let diff = TextDiff::from_lines(&to_contents, &from_contents);
 
-                        let from_contents = from.read_string();
-                        let to_contents = to.read_string();
+                    // compute the width of the line numbers
+                    let ln_width = f32::ceil(f32::log10(usize::max(
+                        from_contents.lines().count(),
+                        to_contents.lines().count(),
+                    ) as f32)) as usize;
+                    let separator_pos = ln_width * 2 + 4;
+                    let total_width = 80;
 
-                        if let (Ok(from_contents), Ok(to_contents)) = (from_contents, to_contents) {
-                            // check for case 1) files are the same
-                            if from_contents == to_contents {
-                                continue;
-                            }
+                    // print the file name
+                    print_file_name(
+                        path_rel,
+                        "\x1b[36m~\x1b[0m",
+                        separator_pos,
+                        total_width,
+                        true,
+                    );
 
-                            // case 2) compute diff
-                            let diff = TextDiff::from_lines(&to_contents, &from_contents);
+                    // adapted from https://github.com/mitsuhiko/similar/blob/main/examples/terminal-inline.rs
+                    for (idx, group) in diff.grouped_ops(2).iter().enumerate() {
+                        // print separating line between changes
+                        if idx > 0 {
+                            print_separator_line(separator_pos, total_width);
+                        }
 
-                            // compute the width of the line numbers
-                            let ln_width = f32::ceil(f32::log10(usize::max(
-                                from_contents.lines().count(),
-                                to_contents.lines().count(),
-                            )
-                                as f32)) as usize;
-                            let separator_pos = ln_width * 2 + 4;
-                            let total_width = 80;
+                        // iterate over changes
+                        for op in group {
+                            for change in diff.iter_inline_changes(&op) {
+                                let (bright_style, style, sign) = match change.tag() {
+                                    ChangeTag::Delete => ("\x1b[91m", "\x1b[31m", '-'),
+                                    ChangeTag::Insert => ("\x1b[92m", "\x1b[32m", '+'),
+                                    ChangeTag::Equal => ("\x1b[2m", "\x1b[2m", ' '),
+                                };
 
-                            // print the file name
-                            print_file_name(path_rel, "\x1b[36m~\x1b[0m", separator_pos, total_width, true);
+                                // print line numbers
+                                print!(
+                                    "\x1b[2m{:ln_width$} {:ln_width$} \x1b[0m{style}{}\x1b[0m\u{2502}{style} ",
+                                    change
+                                        .old_index()
+                                        .map_or(String::new(), |idx| idx.to_string()),
+                                    change
+                                        .new_index()
+                                        .map_or(String::new(), |idx| idx.to_string()),
+                                        sign,
+                                    style=style,
+                                    ln_width = ln_width
+                                );
 
-                            // adapted from https://github.com/mitsuhiko/similar/blob/main/examples/terminal-inline.rs
-                            for (idx, group) in diff.grouped_ops(2).iter().enumerate() {
-                                // print separating line between changes
-                                if idx > 0 {
-                                    print_separator_line(separator_pos, total_width);
-                                }
-
-                                // iterate over changes
-                                for op in group {
-                                    for change in diff.iter_inline_changes(&op) {
-                                        let (bright_style, style, sign) = match change.tag() {
-                                            ChangeTag::Delete => ("\x1b[91m", "\x1b[31m", '-'),
-                                            ChangeTag::Insert => ("\x1b[92m", "\x1b[32m", '+'),
-                                            ChangeTag::Equal => ("\x1b[2m", "\x1b[2m", ' '),
-                                        };
-
-                                        // print line numbers
-                                        print!(
-                                            "\x1b[2m{:ln_width$} {:ln_width$} \x1b[0m{style}{}\x1b[0m\u{2502}{style} ",
-                                            change
-                                                .old_index()
-                                                .map_or(String::new(), |idx| idx.to_string()),
-                                            change
-                                                .new_index()
-                                                .map_or(String::new(), |idx| idx.to_string()),
-                                                sign,
-                                            style=style,
-                                            ln_width = ln_width
-                                        );
-
-                                        // print actual changes
-                                        for (emphasized, value) in change.iter_strings_lossy() {
-                                            if emphasized {
-                                                print!("\x1b[0;3m{}{}", bright_style, &value);
-                                            } else {
-                                                print!("\x1b[0m{}{}", style, &value);
-                                            }
-                                        }
-
-                                        // reset the style
-                                        print!("\x1b[0m");
-
-                                        // print a final newline if missing
-                                        if change.missing_newline() {
-                                            println!();
-                                        }
+                                // print actual changes
+                                for (emphasized, value) in change.iter_strings_lossy() {
+                                    if emphasized {
+                                        print!("\x1b[0;3m{}{}", bright_style, &value);
+                                    } else {
+                                        print!("\x1b[0m{}{}", style, &value);
                                     }
                                 }
+
+                                // reset the style
+                                print!("\x1b[0m");
+
+                                // print a final newline if missing
+                                if change.missing_newline() {
+                                    println!();
+                                }
                             }
-                            
-                            // print closing line
-                            print_end_line(separator_pos, total_width);
-                        } else {
-                            // print modification if file could not be read
-                            print_file_name(path_rel, "\x1b[36m~\x1b[0m", 5, 80, false);
                         }
                     }
-                    // case 3) file doesn't exist yet
-                    else {
-                        // print addition
-                        print_file_name(path_rel, "\x1b[32m+\x1b[0m", 5, 80, false);
-                    }
 
-                    // copy the file
-                    if prompt_bool("Do you want to continue? ", true) {
-                        PathDir::create_all(&to_abs.parent()?)?;
-                        from_abs.copy(to_abs)?;
-                    }
+                    // print closing line
+                    print_end_line(separator_pos, total_width);
+                } else {
+                    // print modification if file could not be read
+                    print_file_name(path_rel, "\x1b[36m~\x1b[0m", 5, 80, false);
                 }
             }
-            
-            // check for case 4) file was deleted
-            for to_abs in to_paths {
-                // resolve relative path
-                let path_rel = to_abs
-                    .strip_prefix(&to_dir)
-                    .map_err(|_| Error::new("could not resolve relative path"))?;
-                // get source
-                let from_abs = from_dir.concat(&path_rel)?;
-
-                if !exclude_patterns.is_match(&path_rel) && PathAbs::from(to_abs.clone()) != dotconfig {
-                    // check if file was deleted
-                    if !from_abs.exists() {
-                        print_file_name(path_rel, "\x1b[31m-\x1b[0m", 5, 80, false);
-                        if prompt_bool("Do you want to continue? ", true) {
-                            to_abs.remove()?;
-                        }
-                    }
-                }
+            // case 3) file doesn't exist yet
+            else {
+                // print addition
+                print_file_name(path_rel, "\x1b[32m+\x1b[0m", 5, 80, false);
             }
 
-            Ok(())
+            // copy the file
+            if force || prompt_bool("Do you want to continue? ", true) {
+                PathDir::create_all(&to_abs.parent()?)?;
+                from_abs.copy(to_abs)?;
+            }
         }
-        None => Err(Error::from_string(format!(
-            "Config '{name}' does not exist."
-        ))),
     }
+
+    // check for case 4) file was deleted
+    for to_abs in to_paths {
+        // resolve relative path
+        let path_rel = to_abs
+            .strip_prefix(&to_dir)
+            .map_err(|_| Error::new("could not resolve relative path"))?;
+        // get source
+        let from_abs = from_dir.concat(&path_rel)?;
+
+        if !exclude_patterns.is_match(&path_rel) && PathAbs::from(to_abs.clone()) != dotconfig {
+            // check if file was deleted
+            if !from_abs.exists() {
+                print_file_name(path_rel, "\x1b[31m-\x1b[0m", 5, 80, false);
+                if force || prompt_bool("Do you want to continue? ", true) {
+                    to_abs.remove()?;
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// deploy one or all configs to the local system
-fn deploy(matches: &ArgMatches, structure: Option<Structure>) -> err::Result<()> {
-    check_root_present()?;
-    let mut structure = verify_structure(structure)?;
-
+fn config_deploy(matches: &ArgMatches, mut structure: Structure) -> err::Result<()> {
     let name = matches.value_of("name");
+    let all = matches.is_present("all");
 
     if let Some(name) = name {
+        if all {
+            return Err(Error::new("You cannot use the all flag in combination with a specific configuration. Try removing \"--all\" or the configuration name."));
+        }
         let config = structure.configs.remove(name);
         match config {
-            Some(config) => deploy_to(&String::from(name), config),
+            Some(config) => deploy_single(&String::from(name), config),
             None => Err(Error::from_string(format!(
                 "Config '{name}' does not exist."
             ))),
         }
-    } else {
+    } else if all {
         for (name, config) in structure.configs {
-            match deploy_to(&name, config) {
+            match deploy_single(&name, config) {
                 Ok(_) => {}
                 Err(error) => println!("Could not deploy config '{}': {}", name, error),
             }
         }
         Ok(())
+    } else {
+        Err(Error::new("No configurations matched the query."))
     }
 }
 
-fn deploy_to(name: &String, config: Configuration) -> err::Result<()> {
+fn deploy_single(name: &String, config: Configuration) -> err::Result<()> {
     let target = match env::consts::OS {
         "windows" => config.target.windows,
         "linux" => config.target.linux,
