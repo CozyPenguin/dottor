@@ -70,7 +70,7 @@ fn main() {
                     Command::new(subcommands::config::DEPLOY)
                         .about("Deploy your configurations to the system")
                         .arg_required_else_help(true)
-                        .arg(arg!(<NAME> "The name of the configuration"))
+                        .arg(arg!([name] "The name of the configuration"))
                         .arg(arg!(-a --all "Deploy all configurations")),
                 )
                 .subcommand(
@@ -79,7 +79,7 @@ fn main() {
                             "Pull changes from the deployed configuration into the dotfiles repo",
                         )
                         .arg_required_else_help(true)
-                        .arg(arg!(<NAME> "The name of the configuration"))
+                        .arg(arg!([name] "The name of the configuration"))
                         .arg(arg!(-a --all "Pull in changes from all configurations"))
                         .arg(arg!(-f --force "Don't ask for confirmation when pulling in changes")),
                 )
@@ -190,6 +190,9 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
         }
     } else if all {
         for (name, config) in structure.configs {
+            if !force {
+                println!("Pulling config '{}'", name);
+            }
             match pull_single(&name, config, force) {
                 Ok(_) => {}
                 Err(error) => println!("Could not pull config '{}': {}", name, error),
@@ -312,6 +315,12 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
                         continue;
                     }
 
+                    if force {
+                        PathDir::create_all(&to_abs.parent()?)?;
+                        from_abs.copy(to_abs)?;
+                        continue;
+                    }
+
                     // case 2) compute diff
                     let diff = TextDiff::from_lines(&to_contents, &from_contents);
 
@@ -396,7 +405,7 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
             }
 
             // copy the file
-            if force || prompt_bool("Do you want to continue? ", true) {
+            if prompt_bool("Do you want to continue? ", true) {
                 PathDir::create_all(&to_abs.parent()?)?;
                 from_abs.copy(to_abs)?;
             }
@@ -415,8 +424,12 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
         if !exclude_patterns.is_match(&path_rel) && PathAbs::from(to_abs.clone()) != dotconfig {
             // check if file was deleted
             if !from_abs.exists() {
+                if force {
+                    to_abs.remove()?;
+                    continue;
+                }
                 print_file_name(path_rel, "\x1b[31m-\x1b[0m", 5, 80, false);
-                if force || prompt_bool("Do you want to continue? ", true) {
+                if prompt_bool("Do you want to continue? ", true) {
                     to_abs.remove()?;
                 }
             }
