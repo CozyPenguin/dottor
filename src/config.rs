@@ -93,7 +93,10 @@ impl Default for Target {
 pub struct SingleTarget {
     #[serde(default)]
     pub exclude: Vec<String>,
+    #[serde(default)]
     pub directory: String,
+    #[serde(default)]
+    pub file: String, 
     pub require_empty: Option<bool>,
 }
 
