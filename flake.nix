@@ -15,7 +15,7 @@
       dottor = self.packages."${prev.system}".dottor;
     };
   } // (flake-utils.lib.eachDefaultSystem (system:
-    let pkgs = import nixpkgs { inherit system; overlays = [ fenix.overlay ]; }; in rec {
+    let pkgs = import nixpkgs { inherit system; overlays = [ fenix.overlays.default ]; }; in rec {
       packages.dottor = pkgs.rustPlatform.buildRustPackage rec {
         pname = "dottor";
         version = "0.1.0";
