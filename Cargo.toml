@@ -13,17 +13,17 @@ codegen-units = 1
 [dependencies]
 
 # command line argument parser
-clap = { version = "3.2.20", features = ["cargo"] }
+clap = { version = "4.5.1", features = ["cargo"] }
 # toml parser
-toml = "0.5.9"
+toml = "0.8.10"
 # serialisation
-serde = { version = "1.0.144", features = ["derive"] }
-regex = "1.6.0"
+serde = { version = "1.0.197", features = ["derive"] }
+regex = "1.10.3"
 lazy_static = "1.4.0"
 path_abs = "0.5.1"
-globset = "0.4.9"
-shellexpand = "2.1.2"
+globset = "0.4.14"
+shellexpand = "3.1.0"
 # diffing library for comparing changes when pulling
-similar = { version = "2.2.0", features = ["unicode", "inline"] }
+similar = { version = "2.4.0", features = ["unicode", "inline"] }
 # git integration
-git2 = "0.15.0"
+git2 = "0.18.2"

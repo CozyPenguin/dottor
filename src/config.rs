@@ -94,9 +94,9 @@ pub struct SingleTarget {
     #[serde(default)]
     pub exclude: Vec<String>,
     #[serde(default)]
-    pub directory: String,
+    pub directory: Option<String>,
     #[serde(default)]
-    pub file: String, 
+    pub file: Option<String>,
     pub require_empty: Option<bool>,
 }
 
@@ -422,7 +422,8 @@ pub fn read_configuration(file: &PathFile) -> err::Result<Configuration> {
     let config = toml::from_str(&source[..]).map_err(|err| {
         Error::from_string(format!(
             "Could not parse configuration file '{}'. Reason: {}",
-            file.as_path().display(), &err
+            file.as_path().display(),
+            &err
         ))
     })?;
     Ok(config)

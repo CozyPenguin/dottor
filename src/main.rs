@@ -10,6 +10,7 @@ use err::Error;
 use git2::Repository;
 use globset::Glob;
 use globset::GlobMatcher;
+use globset::GlobSet;
 use globset::GlobSetBuilder;
 use io_util::check_dir_null_or_empty;
 use io_util::check_not_empty;
@@ -145,7 +146,7 @@ fn config(matches: &ArgMatches, structure: Option<Structure>) -> err::Result<()>
 
 /// creates a new config
 fn config_create(matches: &ArgMatches, structure: Structure) -> err::Result<()> {
-    let name = matches.value_of("NAME").expect("name not provided");
+    let name: &String = matches.get_one("NAME").expect("name not provided");
     if structure.configs.contains_key(name) {
         return Err(Error::from_string(format!(
             "There already exists a config with the name '{}'",
@@ -157,7 +158,7 @@ fn config_create(matches: &ArgMatches, structure: Structure) -> err::Result<()> 
 
 /// deletes a config
 fn config_delete(matches: &ArgMatches, structure: Structure) -> err::Result<()> {
-    let name = matches.value_of("NAME").expect("name not provided");
+    let name: &String = matches.get_one("NAME").expect("name not provided");
     if structure.configs.contains_key(name) {
         return Err(Error::from_string(format!(
             "There is no config with the name '{}'",
@@ -173,9 +174,9 @@ fn config_delete(matches: &ArgMatches, structure: Structure) -> err::Result<()> 
 }
 
 fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()> {
-    let name = matches.value_of("name");
-    let all = matches.is_present("all");
-    let force = matches.is_present("force");
+    let name: Option<&String> = matches.get_one("name");
+    let all = matches.get_flag("all");
+    let force = matches.get_flag("force");
 
     if let Some(name) = name {
         if all {
@@ -263,7 +264,6 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
         }
     };
 
-    let from_dir = PathDir::new(shellexpand::tilde(&target.directory).into_owned())?;
     let to_dir = PathDir::new(name)?;
     let dotconfig = to_dir.concat(config::CONFIG_PATH)?;
 
@@ -277,88 +277,145 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
     });
     let exclude_patterns = exclude_patterns.build().unwrap();
 
-    let from_paths = get_paths_in(&from_dir, "**/*")?;
-    let to_paths = get_paths_in(&to_dir, "**/*")?;
+    // check 'file' and 'directory'
+    if target.directory.is_some() && target.file.is_some() {
+        Err(Error::new(
+            "Cannot use both 'directory' and 'file' targets.",
+        ))
+    } else if let Some(from) = target.file {
+        let from_file = PathFile::new(shellexpand::tilde(&from).into_owned())?;
 
-    // pull files from deployed configuration
+        pull_file(&from_file, name, &exclude_patterns, force);
+        Ok(())
+    } else if let Some(from) = target.directory {
+        let from_dir = PathDir::new(shellexpand::tilde(&from).into_owned())?;
+
+        let from_paths = get_paths_in(&from_dir, "**/*")?;
+        let to_paths = get_paths_in(&to_dir, "**/*")?;
+
+        // pull file from deployed configuration
+        // there are four cases for this:
+        //  1) from exists, to exists && unchanged -> do nothing
+        //  2) from exists, to exists && modified -> display diff
+        //  3) from exists, to doesn't exist -> display addition
+        //  4) from doesn't exist, to exists -> display removal
+        for from_abs in from_paths {
+            pull_file(&from_abs, name, &exclude_patterns, force);
+        }
+
+        // check for case 4) file was deleted
+        for to_abs in to_paths {
+            // resolve relative path
+            let path_rel = to_abs
+                .strip_prefix(&to_dir)
+                .map_err(|_| Error::new("could not resolve relative path"))?;
+            // get source
+            let from_abs = from_dir.concat(&path_rel)?;
+
+            if !exclude_patterns.is_match(&path_rel) && PathAbs::from(to_abs.clone()) != dotconfig {
+                // check if file was deleted
+                if !from_abs.exists() {
+                    if force {
+                        to_abs.remove()?;
+                        continue;
+                    }
+                    print_file_name(path_rel, "\x1b[31m-\x1b[0m", 5, 80, false);
+                    if prompt_bool("Do you want to continue? ", true) {
+                        to_abs.remove()?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    } else {
+        Err(Error::new("'file' or 'directory' target must be set"))
+    }
+}
+
+fn pull_file(from: &PathFile, to: &String, exclude: &GlobSet, force: bool) -> err::Result<()> {
+    // pull file from deployed configuration
     // there are four cases for this:
     //  1) from exists, to exists && unchanged -> do nothing
     //  2) from exists, to exists && modified -> display diff
     //  3) from exists, to doesn't exist -> display addition
     //  4) from doesn't exist, to exists -> display removal
 
-    for from_abs in from_paths {
-        // resolve relative path
-        let path_rel = from_abs
-            .strip_prefix(&from_dir)
-            .map_err(|_| Error::new("could not resolve relative path"))?;
-        // get destination
-        let to_abs = to_dir.concat(&path_rel)?;
+    let from_dir = from.parent_dir();
+    let to_dir = PathDir::new(to)?;
+    let dotconfig = to_dir.concat(config::CONFIG_PATH)?;
+    // resolve relative path
+    let path_rel = from
+        .strip_prefix(&from_dir)
+        .map_err(|_| Error::new("could not resolve relative path"))?;
+    let from_abs = from;
+    // get destination
+    let to_abs = to_dir.concat(path_rel)?;
 
-        if !exclude_patterns.is_match(&path_rel) {
-            // ensure that we aren't accidentally overwriting the dotconfig
-            if to_abs == dotconfig {
-                return Err(Error::new("Trying to overwrite dotconfig.toml configuration file. Please add 'dotconfig.toml' to your excludes in the target configuration."));
-            }
+    if !exclude.is_match(path_rel) {
+        // ensure that we aren't accidentally overwriting the dotconfig
+        if to_abs == dotconfig {
+            return Err(Error::new("Trying to overwrite dotconfig.toml configuration file. Please add 'dotconfig.toml' to your excludes in the target configuration."));
+        }
 
-            // if the file exists, we check if any changes were made to it
-            if to_abs.exists() {
-                let mut from = FileRead::open(&from_abs)?;
-                let mut to = FileRead::open(&to_abs)?;
+        // if the file exists, we check if any changes were made to it
+        if to_abs.exists() {
+            let mut from = FileRead::open(from)?;
+            let mut to = FileRead::open(&to_abs)?;
 
-                let from_contents = from.read_string();
-                let to_contents = to.read_string();
+            let from_contents = from.read_string();
+            let to_contents = to.read_string();
 
-                if let (Ok(from_contents), Ok(to_contents)) = (from_contents, to_contents) {
-                    // check for case 1) files are the same
-                    if from_contents == to_contents {
-                        continue;
+            if let (Ok(from_contents), Ok(to_contents)) = (from_contents, to_contents) {
+                // check for case 1) files are the same
+                if from_contents == to_contents {
+                    return Ok(());
+                }
+
+                if force {
+                    PathDir::create_all(to_abs.parent()?)?;
+                    from_abs.copy(to_abs)?;
+                    return Ok(());
+                }
+
+                // case 2) compute diff
+                let diff = TextDiff::from_lines(&to_contents, &from_contents);
+
+                // compute the width of the line numbers
+                let ln_width = f32::ceil(f32::log10(usize::max(
+                    from_contents.lines().count(),
+                    to_contents.lines().count(),
+                ) as f32)) as usize;
+                let separator_pos = ln_width * 2 + 4;
+                let total_width = 80;
+
+                // print the file name
+                print_file_name(
+                    path_rel,
+                    "\x1b[36m~\x1b[0m",
+                    separator_pos,
+                    total_width,
+                    true,
+                );
+
+                // adapted from https://github.com/mitsuhiko/similar/blob/main/examples/terminal-inline.rs
+                for (idx, group) in diff.grouped_ops(2).iter().enumerate() {
+                    // print separating line between changes
+                    if idx > 0 {
+                        print_separator_line(separator_pos, total_width);
                     }
 
-                    if force {
-                        PathDir::create_all(&to_abs.parent()?)?;
-                        from_abs.copy(to_abs)?;
-                        continue;
-                    }
+                    // iterate over changes
+                    for op in group {
+                        for change in diff.iter_inline_changes(op) {
+                            let (bright_style, style, sign) = match change.tag() {
+                                ChangeTag::Delete => ("\x1b[91m", "\x1b[31m", '-'),
+                                ChangeTag::Insert => ("\x1b[92m", "\x1b[32m", '+'),
+                                ChangeTag::Equal => ("\x1b[2m", "\x1b[2m", ' '),
+                            };
 
-                    // case 2) compute diff
-                    let diff = TextDiff::from_lines(&to_contents, &from_contents);
-
-                    // compute the width of the line numbers
-                    let ln_width = f32::ceil(f32::log10(usize::max(
-                        from_contents.lines().count(),
-                        to_contents.lines().count(),
-                    ) as f32)) as usize;
-                    let separator_pos = ln_width * 2 + 4;
-                    let total_width = 80;
-
-                    // print the file name
-                    print_file_name(
-                        path_rel,
-                        "\x1b[36m~\x1b[0m",
-                        separator_pos,
-                        total_width,
-                        true,
-                    );
-
-                    // adapted from https://github.com/mitsuhiko/similar/blob/main/examples/terminal-inline.rs
-                    for (idx, group) in diff.grouped_ops(2).iter().enumerate() {
-                        // print separating line between changes
-                        if idx > 0 {
-                            print_separator_line(separator_pos, total_width);
-                        }
-
-                        // iterate over changes
-                        for op in group {
-                            for change in diff.iter_inline_changes(&op) {
-                                let (bright_style, style, sign) = match change.tag() {
-                                    ChangeTag::Delete => ("\x1b[91m", "\x1b[31m", '-'),
-                                    ChangeTag::Insert => ("\x1b[92m", "\x1b[32m", '+'),
-                                    ChangeTag::Equal => ("\x1b[2m", "\x1b[2m", ' '),
-                                };
-
-                                // print line numbers
-                                print!(
+                            // print line numbers
+                            print!(
                                     "\x1b[2m{:ln_width$} {:ln_width$} \x1b[0m{style}{}\x1b[0m\u{2502}{style} ",
                                     change
                                         .old_index()
@@ -371,78 +428,98 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
                                     ln_width = ln_width
                                 );
 
-                                // print actual changes
-                                for (emphasized, value) in change.iter_strings_lossy() {
-                                    if emphasized {
-                                        print!("\x1b[0;3m{}{}", bright_style, &value);
-                                    } else {
-                                        print!("\x1b[0m{}{}", style, &value);
-                                    }
+                            // print actual changes
+                            for (emphasized, value) in change.iter_strings_lossy() {
+                                if emphasized {
+                                    print!("\x1b[0;3m{}{}", bright_style, &value);
+                                } else {
+                                    print!("\x1b[0m{}{}", style, &value);
                                 }
+                            }
 
-                                // reset the style
-                                print!("\x1b[0m");
+                            // reset the style
+                            print!("\x1b[0m");
 
-                                // print a final newline if missing
-                                if change.missing_newline() {
-                                    println!();
-                                }
+                            // print a final newline if missing
+                            if change.missing_newline() {
+                                println!();
                             }
                         }
                     }
-
-                    // print closing line
-                    print_end_line(separator_pos, total_width);
-                } else {
-                    // print modification if file could not be read
-                    print_file_name(path_rel, "\x1b[36m~\x1b[0m", 5, 80, false);
                 }
-            }
-            // case 3) file doesn't exist yet
-            else {
-                // print addition
-                print_file_name(path_rel, "\x1b[32m+\x1b[0m", 5, 80, false);
-            }
 
-            // copy the file
-            if prompt_bool("Do you want to continue? ", true) {
-                PathDir::create_all(&to_abs.parent()?)?;
-                from_abs.copy(to_abs)?;
+                // print closing line
+                print_end_line(separator_pos, total_width);
+            } else {
+                // print modification if file could not be read
+                print_file_name(path_rel, "\x1b[36m~\x1b[0m", 5, 80, false);
             }
         }
-    }
+        // case 3) file doesn't exist yet
+        else {
+            // print addition
+            print_file_name(path_rel, "\x1b[32m+\x1b[0m", 5, 80, false);
+        }
 
-    // check for case 4) file was deleted
-    for to_abs in to_paths {
-        // resolve relative path
-        let path_rel = to_abs
-            .strip_prefix(&to_dir)
-            .map_err(|_| Error::new("could not resolve relative path"))?;
-        // get source
-        let from_abs = from_dir.concat(&path_rel)?;
-
-        if !exclude_patterns.is_match(&path_rel) && PathAbs::from(to_abs.clone()) != dotconfig {
-            // check if file was deleted
-            if !from_abs.exists() {
-                if force {
-                    to_abs.remove()?;
-                    continue;
-                }
-                print_file_name(path_rel, "\x1b[31m-\x1b[0m", 5, 80, false);
-                if prompt_bool("Do you want to continue? ", true) {
-                    to_abs.remove()?;
-                }
-            }
+        // copy the file
+        if prompt_bool("Do you want to continue? ", true) {
+            PathDir::create_all(to_abs.parent()?)?;
+            from_abs.copy(to_abs)?;
         }
     }
-
     Ok(())
+}
+
+fn print_file_name(
+    name: &Path,
+    modifier_symbol: &'static str,
+    separator_pos: usize,
+    total_width: usize,
+    continue_table: bool,
+) {
+    println!(
+        "{char:\u{2550}^width_left$}\u{2564}{char:\u{2550}^width_right$}",
+        char = "\u{2550}",
+        width_left = separator_pos - 1,
+        width_right = total_width - separator_pos
+    );
+    println!(
+        "{: ^width_left$}{} \u{2502} {}",
+        " ",
+        modifier_symbol,
+        name.display(),
+        width_left = separator_pos - 3
+    );
+
+    if continue_table {
+        print_separator_line(separator_pos, total_width);
+    } else {
+        print_end_line(separator_pos, total_width);
+    }
+}
+
+fn print_separator_line(separator_pos: usize, total_width: usize) {
+    println!(
+        "{char:\u{2500}^ln_width$}\u{253C}{char:\u{2500}^total_width$}",
+        char = "\u{2500}",
+        ln_width = separator_pos - 1,
+        total_width = total_width - separator_pos
+    );
+}
+
+fn print_end_line(separator_pos: usize, total_width: usize) {
+    println!(
+        "{char:\u{2500}^ln_width$}\u{2534}{char:\u{2500}^total_width$}",
+        char = "\u{2500}",
+        ln_width = separator_pos - 1,
+        total_width = total_width - separator_pos
+    );
 }
 
 /// deploy one or all configs to the local system
 fn config_deploy(matches: &ArgMatches, mut structure: Structure) -> err::Result<()> {
-    let name = matches.value_of("name");
-    let all = matches.is_present("all");
+    let name: Option<&String> = matches.get_one("name");
+    let all = matches.get_flag("all");
 
     if let Some(name) = name {
         if all {
@@ -479,7 +556,7 @@ fn deploy_single(name: &String, config: Configuration) -> err::Result<()> {
         }
     };
 
-    let target_path = PathAbs::new(&shellexpand::tilde(&target.directory).into_owned())?;
+    let target_path = PathAbs::new(shellexpand::tilde(&target.directory.unwrap()).into_owned())?;
 
     // checks if the target directory already has files in it
     match &target.require_empty {
@@ -518,7 +595,7 @@ fn deploy_single(name: &String, config: Configuration) -> err::Result<()> {
         )?;
 
         if !(exclude_patterns.is_match(&from) || dotconfig == from) {
-            PathDir::create_all(&to.parent()?)?;
+            PathDir::create_all(to.parent()?)?;
             from.copy(to)?;
         }
     }

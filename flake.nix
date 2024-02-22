@@ -42,6 +42,7 @@
           (pkgs.fenix.complete.withComponents [
             "cargo"
             "rust-src"
+            "clippy"
             "rustc"
             "rustfmt"
           ])

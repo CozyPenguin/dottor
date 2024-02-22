@@ -60,7 +60,7 @@ pub fn check_valid_dir(dir: &PathAbs) -> err::Result<()> {
 
 pub fn write(path: &PathAbs, contents: &[u8]) -> err::Result<()> {
     let mut write = FileWrite::create(path)?;
-    match write.write(contents) {
+    match write.write_all(contents) {
         Ok(_) => Ok(()),
         Err(_) => Err(Error::from_string(format!(
             "Could not write to file '{}'",
