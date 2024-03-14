@@ -383,12 +383,6 @@ fn pull_file(
     let from_abs = from;
     // get destination
     let to_abs = to_dir.join(path_rel);
-    println!(
-        "to: {}, from: {}, rel: {}",
-        to_abs.display(),
-        from_abs.display(),
-        path_rel.display()
-    );
 
     if !exclude.is_match(path_rel) {
         // ensure that we aren't accidentally overwriting the dotconfig
