@@ -1,7 +1,11 @@
-use std::fmt::{Debug, Display};
+use std::{
+    fmt::{Debug, Display},
+    io,
+};
 
 pub type Result<T> = core::result::Result<T, Error>;
 
+#[derive(Debug)]
 pub struct Error {
     message: String,
 }
@@ -18,22 +22,16 @@ impl Error {
     }
 }
 
-impl Debug for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Error")
-            .field("message", &self.message)
-            .finish()
-    }
-}
-
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.message)
     }
 }
 
-impl From<path_abs::Error> for Error {
-    fn from(path: path_abs::Error) -> Self {
-        Error { message: path.to_string() }
+impl From<io::Error> for Error {
+    fn from(value: io::Error) -> Self {
+        Error {
+            message: value.to_string(),
+        }
     }
 }

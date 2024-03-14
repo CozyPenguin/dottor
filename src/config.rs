@@ -1,7 +1,7 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, fs, path::Path};
 
-use path_abs::{PathAbs, PathDir, PathFile, PathOps};
 use regex::Regex;
+use relative_path::RelativePathBuf;
 use serde::{
     de::{self, Visitor},
     Deserialize, Serialize,
@@ -9,7 +9,7 @@ use serde::{
 
 use crate::{
     err::{self, Error},
-    io_util::{
+    io::{
         check_dir_null_or_empty, check_root_present, check_valid_dir, prompt_bool, read_to_string,
         write,
     },
@@ -67,7 +67,7 @@ pub struct Configuration {
 }
 
 #[allow(dead_code)]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Target {
     #[serde(default)]
     pub exclude: Vec<String>,
@@ -75,17 +75,6 @@ pub struct Target {
     pub require_empty: bool,
     pub windows: SingleTarget,
     pub linux: SingleTarget,
-}
-
-impl Default for Target {
-    fn default() -> Self {
-        Self {
-            exclude: Default::default(),
-            require_empty: false,
-            windows: Default::default(),
-            linux: Default::default(),
-        }
-    }
 }
 
 #[allow(dead_code)]
@@ -188,10 +177,10 @@ pub struct Version {
 impl Version {
     pub fn new(specifier: VersionSpecifier, major: u32, minor: u32, patch: u32) -> Version {
         Version {
-            specifier: specifier,
-            major: major,
-            minor: minor,
-            patch: patch,
+            specifier,
+            major,
+            minor,
+            patch,
         }
     }
 
@@ -335,14 +324,14 @@ impl<'de> Deserialize<'de> for Version {
                     static ref RE: Regex = Regex::new(r"^(?P<asterisk>\*)$|^(?P<specifier>=|>=|>|<=|<|~|\^)?(?P<major>0|[1-9]\d*)\.(?P<minor>0|[1-9]\d*)\.(?P<patch>0|[1-9]\d*)(?:-(?P<prerelease>(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+(?P<buildmetadata>[0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$").unwrap();
                 }
 
-                if !RE.is_match(&v) {
+                if !RE.is_match(v) {
                     return Err(de::Error::custom("could not parse version"));
                 }
 
-                let version_match = RE.captures(&v).unwrap();
+                let version_match = RE.captures(v).unwrap();
 
                 // matches the single asterisk
-                if let Some(_) = version_match.name("asterisk") {
+                if version_match.name("asterisk").is_some() {
                     return Ok(Version::any());
                 }
 
@@ -392,10 +381,11 @@ impl<'de> Deserialize<'de> for Version {
 pub const CONFIG_PATH: &str = "dotconfig.toml";
 
 pub fn create_config(name: &str) -> err::Result<()> {
-    let path = PathDir::current_dir()?.concat(name)?;
+    let mut path = RelativePathBuf::from(name).to_path(".");
     check_dir_null_or_empty(&path)?;
-    PathDir::create_all(&path)?;
-    let path = path.concat(CONFIG_PATH)?;
+
+    fs::create_dir_all(&path);
+    path.push(CONFIG_PATH);
     write(
         &path,
         toml::to_string_pretty(&Configuration::default())
@@ -405,24 +395,24 @@ pub fn create_config(name: &str) -> err::Result<()> {
 }
 
 pub fn delete_config(name: &str) -> err::Result<()> {
-    let dir = PathDir::new(name)?;
-    check_valid_dir(&PathAbs::new(&dir)?)?;
+    let dir = RelativePathBuf::from(name).to_path(".");
+    check_valid_dir(&dir)?;
     if prompt_bool(
         "Proceeding will cause the config and all files in the directory to be deleted.",
         false,
     ) {
-        Ok(PathDir::remove_all(dir)?)
+        Ok(fs::remove_dir_all(dir)?)
     } else {
         Ok(())
     }
 }
 
-pub fn read_configuration(file: &PathFile) -> err::Result<Configuration> {
+pub fn read_configuration(file: &Path) -> err::Result<Configuration> {
     let source = read_to_string(file)?;
     let config = toml::from_str(&source[..]).map_err(|err| {
         Error::from_string(format!(
             "Could not parse configuration file '{}'. Reason: {}",
-            file.as_path().display(),
+            file.display(),
             &err
         ))
     })?;
@@ -431,7 +421,7 @@ pub fn read_configuration(file: &PathFile) -> err::Result<Configuration> {
 
 pub fn read_root_configuration() -> err::Result<RootConfiguration> {
     check_root_present()?;
-    let source = read_to_string(&PathFile::new(ROOT_PATH)?)?;
+    let source = read_to_string(&RelativePathBuf::from(ROOT_PATH).to_path("."))?;
     let config = toml::from_str(&source[..])
         .map_err(|_| Error::new("Could not parse root configuration."))?;
     Ok(config)

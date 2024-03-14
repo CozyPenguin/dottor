@@ -8,7 +8,7 @@ description = "a simple dotfiles manager"
 [profile.release]
 strip = true
 lto = true
-codegen-units = 1
+# codegen-units = 1
 
 [dependencies]
 
@@ -20,7 +20,9 @@ toml = "0.8.10"
 serde = { version = "1.0.197", features = ["derive"] }
 regex = "1.10.3"
 lazy_static = "1.4.0"
-path_abs = "0.5.1"
+# path_abs = "0.5.1"
+relative-path = "1.9.2"
+walkdir = "2.5.0"
 globset = "0.4.14"
 shellexpand = "3.1.0"
 # diffing library for comparing changes when pulling

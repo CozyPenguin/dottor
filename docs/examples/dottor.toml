@@ -1,4 +1,4 @@
-exclude = [".git/"] # an array of folders which aren't indexed by dottor
+exclude = [".git/"] # an array of paths which aren't indexed by dottor
 
 [synchronization]
 ## The repository field can be set either to a "user/repository" string, which will automatically search for that repository on github

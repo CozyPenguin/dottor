@@ -1,13 +1,9 @@
-use std::{
-    collections::HashMap,
-};
-
-use path_abs::{PathAbs, PathFile, PathInfo, PathOps};
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     config::{self, read_configuration, read_root_configuration, Configuration, RootConfiguration},
     err,
-    io_util::{is_root_present, list_root},
+    io::{is_root_present, list_root},
 };
 
 #[derive(Debug)]
@@ -18,36 +14,32 @@ pub struct Structure {
 
 impl Structure {
     pub fn resolve() -> err::Result<Option<Self>> {
-        match is_root_present() {
-            Ok(true) => {
-                let root = read_root_configuration().unwrap();
+        if is_root_present() {
+            let root = read_root_configuration().unwrap();
 
-                let exclude = root
-                    .exclude
-                    .iter()
-                    .map(PathAbs::new)
-                    .into_iter()
-                    .collect::<Result<Vec<PathAbs>, path_abs::Error>>()?;
-
-                let mut configs = HashMap::new();
-
-                for path in list_root()? {
-                    let path = path?;
-                    let key = path.file_name().unwrap().to_str().unwrap().to_string();
-
-                    if path.is_dir() && !exclude.contains(&path.to_owned().into()) {
-                        let config =
-                            read_configuration(&PathFile::new(path.concat(config::CONFIG_PATH)?)?)?;
-                        configs.insert(key, config);
-                    }
+            let mut exclude = HashSet::new();
+            root.exclude.iter().for_each(|p| {
+                let mut p = p.clone();
+                if p.ends_with('/') {
+                    p.remove(p.len() - 1);
                 }
+                exclude.insert(p);
+            });
 
-                Ok(Some(Structure {
-                    root: root,
-                    configs: configs,
-                }))
+            let mut configs = HashMap::new();
+
+            for path in list_root().unwrap() {
+                let path = path.unwrap().path();
+                let key = path.file_name().unwrap().to_str().unwrap().to_string();
+
+                if path.is_dir() && !exclude.contains(&key) {
+                    let config = read_configuration(&path.join(config::CONFIG_PATH)).unwrap();
+                    configs.insert(key, config);
+                }
             }
-            _ => Ok(None),
+
+            return Ok(Some(Structure { root, configs }));
         }
+        Ok(None)
     }
 }

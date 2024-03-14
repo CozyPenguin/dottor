@@ -6,14 +6,14 @@ require_empty = false # if true, the target directory has to be empty
 # The target directory to which the files should be copied.
 directory = ''
 file = ''
-exclude = [] # additional excluded files when deploying on windows
+exclude = []   # additional excluded files when deploying on windows
 # target_require_empty = true # defaults to deploy.target_require_empty
 
 [target.linux]
 # The target directory to which the files should be copied.
 directory = ''
 file = ''
-exclude = [] # additional excluded files when deploying on linux
+exclude = []   # additional excluded files when deploying on linux
 # target_require_empty = true # defaults to deploy.target_require_empty
 
 ## Specify dependencies on other configurations or programs that are required for this configuration

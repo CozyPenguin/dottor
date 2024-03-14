@@ -1,41 +1,43 @@
 use std::env;
+use std::env::current_dir;
+use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
+use std::path::PathBuf;
 
 use clap::arg;
 use clap::ArgMatches;
 use clap::{command, Command};
 use config::Configuration;
 use config::RootConfiguration;
+use config::ROOT_PATH;
 use err::Error;
 use git2::Repository;
 use globset::Glob;
 use globset::GlobMatcher;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
-use io_util::check_dir_null_or_empty;
-use io_util::check_not_empty;
-use io_util::check_root_present;
-use io_util::prompt_bool;
-use io_util::write;
-use path_abs::FileRead;
-use path_abs::PathAbs;
-use path_abs::PathDir;
-use path_abs::PathFile;
-use path_abs::PathInfo;
-use path_abs::PathOps;
-use path_abs::PathType;
+use io::assert_empty;
+use io::check_dir_null_or_empty;
+use io::check_root_present;
+use io::prompt_bool;
+use io::write;
+use relative_path::RelativePathBuf;
 use similar::ChangeTag;
 use similar::TextDiff;
 use structure::Structure;
+use walkdir::WalkDir;
 
 mod config;
 mod err;
-mod io_util;
+mod io;
 mod structure;
 
 mod subcommands {
     pub const CONFIG: &str = "config";
     pub const INIT: &str = "init";
+    pub const NEW: &str = "new";
     pub mod config {
         pub const CREATE: &str = "create";
         pub const DELETE: &str = "delete";
@@ -44,8 +46,12 @@ mod subcommands {
     }
 }
 
+fn init_logger() {}
+
 fn main() {
     let structure = structure::Structure::resolve().unwrap();
+
+    init_logger();
 
     let matches = command!()
         .propagate_version(true)
@@ -88,12 +94,20 @@ fn main() {
         )
         .subcommand(
             Command::new(subcommands::INIT)
-                .about("Initialize a new dotfiles repo in the current directory"),
+                .about("Initialize a new dotfiles repository in the current directory"),
+        )
+        .subcommand(
+            Command::new(subcommands::NEW)
+                .about("Initialize a new dotfiles repository in a subdirectory")
+                .arg(arg!(<FOLDER> "The folder where the dotfiles repository will be created")),
         )
         .get_matches();
 
     if let Err(error) = match matches.subcommand() {
-        Some((subcommands::INIT, _)) => init(),
+        Some((subcommands::INIT, _)) => init(&current_dir().unwrap()),
+        Some((subcommands::NEW, sub_matches)) => {
+            new(sub_matches.get_one("NAME").unwrap() as &String)
+        }
         Some((subcommands::CONFIG, sub_matches)) => config(sub_matches, structure),
         _ => Ok(()),
     } {
@@ -101,12 +115,14 @@ fn main() {
     }
 }
 
-fn init() -> err::Result<()> {
+/// Initialize a new dottor repository in the current directory
+fn init(path: &Path) -> err::Result<()> {
     // check that we don't accidentally populate an existing directory
-    check_not_empty(&PathDir::current_dir()?)?;
+    assert_empty(path)?;
+
     // create the default root configuration
     write(
-        &PathAbs::new(config::ROOT_PATH)?,
+        &RelativePathBuf::from(ROOT_PATH).to_path("."),
         toml::to_string_pretty(&RootConfiguration::default())
             .map_err(|_| Error::new("could not create root configuration."))?
             .as_bytes(),
@@ -117,6 +133,11 @@ fn init() -> err::Result<()> {
         Ok(_) => Ok(()),
         Err(_) => Err(Error::new("Could not initialize git repository.")),
     }
+}
+
+fn new(name: &str) -> err::Result<()> {
+    let path = RelativePathBuf::from(name).to_path(".");
+    init(&path)
 }
 
 /// verifies that the structure of the dotfiles folder is correct
@@ -264,8 +285,8 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
         }
     };
 
-    let to_dir = PathDir::new(name)?;
-    let dotconfig = to_dir.concat(config::CONFIG_PATH)?;
+    let to_dir = RelativePathBuf::from(name).to_path(".");
+    let dotconfig = to_dir.clone().join(config::CONFIG_PATH);
 
     // resolve exclude glob patterns
     let mut exclude_patterns = GlobSetBuilder::new();
@@ -283,12 +304,18 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
             "Cannot use both 'directory' and 'file' targets.",
         ))
     } else if let Some(from) = target.file {
-        let from_file = PathFile::new(shellexpand::tilde(&from).into_owned())?;
+        let from_file = PathBuf::from(shellexpand::tilde(&from).into_owned());
 
-        pull_file(&from_file, name, &exclude_patterns, force);
+        pull_file(
+            from_file.parent().unwrap(),
+            &from_file,
+            name,
+            &exclude_patterns,
+            force,
+        )?;
         Ok(())
     } else if let Some(from) = target.directory {
-        let from_dir = PathDir::new(shellexpand::tilde(&from).into_owned())?;
+        let from_dir = PathBuf::from(shellexpand::tilde(&from).into_owned());
 
         let from_paths = get_paths_in(&from_dir, "**/*")?;
         let to_paths = get_paths_in(&to_dir, "**/*")?;
@@ -300,7 +327,7 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
         //  3) from exists, to doesn't exist -> display addition
         //  4) from doesn't exist, to exists -> display removal
         for from_abs in from_paths {
-            pull_file(&from_abs, name, &exclude_patterns, force);
+            pull_file(&from_dir, &from_abs, name, &exclude_patterns, force)?;
         }
 
         // check for case 4) file was deleted
@@ -310,18 +337,18 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
                 .strip_prefix(&to_dir)
                 .map_err(|_| Error::new("could not resolve relative path"))?;
             // get source
-            let from_abs = from_dir.concat(&path_rel)?;
+            let from_abs = from_dir.join(path_rel);
 
-            if !exclude_patterns.is_match(&path_rel) && PathAbs::from(to_abs.clone()) != dotconfig {
+            if !exclude_patterns.is_match(path_rel) && to_abs.clone() != dotconfig {
                 // check if file was deleted
                 if !from_abs.exists() {
                     if force {
-                        to_abs.remove()?;
+                        fs::remove_file(to_abs)?;
                         continue;
                     }
                     print_file_name(path_rel, "\x1b[31m-\x1b[0m", 5, 80, false);
                     if prompt_bool("Do you want to continue? ", true) {
-                        to_abs.remove()?;
+                        fs::remove_file(to_abs)?;
                     }
                 }
             }
@@ -333,7 +360,13 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
     }
 }
 
-fn pull_file(from: &PathFile, to: &String, exclude: &GlobSet, force: bool) -> err::Result<()> {
+fn pull_file(
+    from_dir: &Path,
+    from: &Path,
+    to: &String,
+    exclude: &GlobSet,
+    force: bool,
+) -> err::Result<()> {
     // pull file from deployed configuration
     // there are four cases for this:
     //  1) from exists, to exists && unchanged -> do nothing
@@ -341,16 +374,21 @@ fn pull_file(from: &PathFile, to: &String, exclude: &GlobSet, force: bool) -> er
     //  3) from exists, to doesn't exist -> display addition
     //  4) from doesn't exist, to exists -> display removal
 
-    let from_dir = from.parent_dir();
-    let to_dir = PathDir::new(to)?;
-    let dotconfig = to_dir.concat(config::CONFIG_PATH)?;
+    let to_dir = PathBuf::from(to);
+    let dotconfig = to_dir.join(config::CONFIG_PATH);
     // resolve relative path
     let path_rel = from
-        .strip_prefix(&from_dir)
+        .strip_prefix(from_dir)
         .map_err(|_| Error::new("could not resolve relative path"))?;
     let from_abs = from;
     // get destination
-    let to_abs = to_dir.concat(path_rel)?;
+    let to_abs = to_dir.join(path_rel);
+    println!(
+        "to: {}, from: {}, rel: {}",
+        to_abs.display(),
+        from_abs.display(),
+        path_rel.display()
+    );
 
     if !exclude.is_match(path_rel) {
         // ensure that we aren't accidentally overwriting the dotconfig
@@ -360,11 +398,15 @@ fn pull_file(from: &PathFile, to: &String, exclude: &GlobSet, force: bool) -> er
 
         // if the file exists, we check if any changes were made to it
         if to_abs.exists() {
-            let mut from = FileRead::open(from)?;
-            let mut to = FileRead::open(&to_abs)?;
+            let mut from = File::open(from)?;
+            let mut to = File::open(&to_abs)?;
 
-            let from_contents = from.read_string();
-            let to_contents = to.read_string();
+            let mut buf = Vec::new();
+            from.read_to_end(&mut buf).unwrap();
+            let from_contents = String::from_utf8(buf);
+            let mut buf = Vec::new();
+            to.read_to_end(&mut buf)?;
+            let to_contents = String::from_utf8(buf);
 
             if let (Ok(from_contents), Ok(to_contents)) = (from_contents, to_contents) {
                 // check for case 1) files are the same
@@ -373,8 +415,8 @@ fn pull_file(from: &PathFile, to: &String, exclude: &GlobSet, force: bool) -> er
                 }
 
                 if force {
-                    PathDir::create_all(to_abs.parent()?)?;
-                    from_abs.copy(to_abs)?;
+                    fs::create_dir_all(to_abs.parent().unwrap())?;
+                    fs::copy(from_abs, to_abs)?;
                     return Ok(());
                 }
 
@@ -463,8 +505,8 @@ fn pull_file(from: &PathFile, to: &String, exclude: &GlobSet, force: bool) -> er
 
         // copy the file
         if prompt_bool("Do you want to continue? ", true) {
-            PathDir::create_all(to_abs.parent()?)?;
-            from_abs.copy(to_abs)?;
+            fs::create_dir_all(to_abs.parent().unwrap())?;
+            fs::copy(from_abs, to_abs)?;
         }
     }
     Ok(())
@@ -556,7 +598,7 @@ fn deploy_single(name: &String, config: Configuration) -> err::Result<()> {
         }
     };
 
-    let target_path = PathAbs::new(shellexpand::tilde(&target.directory.unwrap()).into_owned())?;
+    let target_path = PathBuf::from(shellexpand::tilde(&target.directory.unwrap()).into_owned());
 
     // checks if the target directory already has files in it
     match &target.require_empty {
@@ -572,11 +614,11 @@ fn deploy_single(name: &String, config: Configuration) -> err::Result<()> {
         }
     }
     // create target
-    PathDir::create_all(&target_path)?;
+    fs::create_dir_all(&target_path)?;
 
     // the source directoy
-    let config_dir = PathDir::new(name)?;
-    let dotconfig = PathFile::new(config_dir.concat(config::CONFIG_PATH)?)?;
+    let config_dir = RelativePathBuf::from(name).to_path(".");
+    let dotconfig = config_dir.join(config::CONFIG_PATH);
 
     let mut exclude_patterns = GlobSetBuilder::new();
     config.target.exclude.iter().for_each(|pattern| {
@@ -589,38 +631,40 @@ fn deploy_single(name: &String, config: Configuration) -> err::Result<()> {
 
     // copy files to target
     for from in get_paths_in(&config_dir, "**/*")? {
-        let to = target_path.concat(
+        let to = target_path.join(
             from.strip_prefix(&config_dir)
                 .map_err(|_| Error::new("could not resolve relative path"))?,
-        )?;
+        );
 
         if !(exclude_patterns.is_match(&from) || dotconfig == from) {
-            PathDir::create_all(to.parent()?)?;
-            from.copy(to)?;
+            fs::create_dir_all(to.parent().unwrap())?;
+            fs::copy(from, to);
         }
     }
 
     Ok(())
 }
 
-fn get_paths_in(dir: &PathDir, pattern: &str) -> err::Result<Vec<PathFile>> {
-    let glob = Glob::new(dir.concat(pattern)?.to_str().unwrap())
+fn get_paths_in(dir: &Path, pattern: &str) -> err::Result<Vec<PathBuf>> {
+    let glob = Glob::new(dir.join(pattern).to_str().unwrap())
         .unwrap()
         .compile_matcher();
 
     return list_dir(&glob, dir);
 
-    fn list_dir(glob: &GlobMatcher, dir: &PathDir) -> err::Result<Vec<PathFile>> {
+    fn list_dir(glob: &GlobMatcher, dir: &Path) -> err::Result<Vec<PathBuf>> {
         let mut paths = Vec::new();
 
-        for value in dir.list()? {
+        for value in WalkDir::new(dir) {
             match value {
-                Ok(value) => match value {
-                    PathType::File(file) if glob.is_match(&file) => paths.push(file),
-                    PathType::Dir(dir) => paths.append(&mut list_dir(glob, &dir)?),
-                    _ => {}
-                },
-                Err(error) => return Err(error.into()),
+                Ok(value) => {
+                    let path = value.path();
+
+                    if path.is_file() && glob.is_match(path) {
+                        paths.push(path.into());
+                    }
+                }
+                Err(error) => return Err(Error::new("walkdir error")),
             }
         }
 
