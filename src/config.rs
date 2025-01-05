@@ -1,5 +1,6 @@
 use std::{cmp::Ordering, fs, path::Path};
 
+use anyhow::{Context, Result};
 use regex::Regex;
 use relative_path::RelativePathBuf;
 use serde::{
@@ -7,12 +8,9 @@ use serde::{
     Deserialize, Serialize,
 };
 
-use crate::{
-    err::{self, Error},
-    io::{
-        check_dir_null_or_empty, check_root_present, check_valid_dir, prompt_bool, read_to_string,
-        write,
-    },
+use crate::io::{
+    assert_root_present, check_dir_null_or_empty, check_valid_dir, prompt_bool, read_to_string,
+    write,
 };
 
 #[allow(dead_code)]
@@ -380,7 +378,7 @@ impl<'de> Deserialize<'de> for Version {
 
 pub const CONFIG_PATH: &str = "dotconfig.toml";
 
-pub fn create_config(name: &str) -> err::Result<()> {
+pub fn create_config(name: &str) -> Result<()> {
     let mut path = RelativePathBuf::from(name).to_path(".");
     check_dir_null_or_empty(&path)?;
 
@@ -389,12 +387,14 @@ pub fn create_config(name: &str) -> err::Result<()> {
     write(
         &path,
         toml::to_string_pretty(&Configuration::default())
-            .map_err(|_| Error::new("Could not create configuration file in config."))?
+            .context(String::from(
+                "Could not create configuration file in config.",
+            ))?
             .as_bytes(),
     )
 }
 
-pub fn delete_config(name: &str) -> err::Result<()> {
+pub fn delete_config(name: &str) -> Result<()> {
     let dir = RelativePathBuf::from(name).to_path(".");
     check_valid_dir(&dir)?;
     if prompt_bool(
@@ -407,22 +407,17 @@ pub fn delete_config(name: &str) -> err::Result<()> {
     }
 }
 
-pub fn read_configuration(file: &Path) -> err::Result<Configuration> {
+pub fn read_configuration(file: &Path) -> Result<Configuration> {
     let source = read_to_string(file)?;
-    let config = toml::from_str(&source[..]).map_err(|err| {
-        Error::from_string(format!(
-            "Could not parse configuration file '{}'. Reason: {}",
-            file.display(),
-            &err
-        ))
-    })?;
+    let config = toml::from_str(&source)
+        .with_context(|| format!("Could not parse configuration file '{}'", file.display(),))?;
     Ok(config)
 }
 
-pub fn read_root_configuration() -> err::Result<RootConfiguration> {
-    check_root_present()?;
+pub fn read_root_configuration() -> Result<RootConfiguration> {
+    assert_root_present()?;
     let source = read_to_string(&RelativePathBuf::from(ROOT_PATH).to_path("."))?;
-    let config = toml::from_str(&source[..])
-        .map_err(|_| Error::new("Could not parse root configuration."))?;
+    let config =
+        toml::from_str(&source).context(String::from("Could not parse root configuration."))?;
     Ok(config)
 }

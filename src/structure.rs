@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
+use anyhow::Result;
+
 use crate::{
     config::{self, read_configuration, read_root_configuration, Configuration, RootConfiguration},
-    err,
     io::{is_root_present, list_root},
 };
 
@@ -13,7 +14,7 @@ pub struct Structure {
 }
 
 impl Structure {
-    pub fn resolve() -> err::Result<Option<Self>> {
+    pub fn resolve() -> Result<Option<Self>> {
         if is_root_present() {
             let root = read_root_configuration().unwrap();
 

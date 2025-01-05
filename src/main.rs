@@ -6,21 +6,22 @@ use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 
+use anyhow::anyhow;
+use anyhow::Result;
 use clap::arg;
 use clap::ArgMatches;
 use clap::{command, Command};
 use config::Configuration;
 use config::RootConfiguration;
 use config::ROOT_PATH;
-use err::Error;
 use git2::Repository;
 use globset::Glob;
 use globset::GlobMatcher;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
 use io::assert_empty;
+use io::assert_root_present;
 use io::check_dir_null_or_empty;
-use io::check_root_present;
 use io::prompt_bool;
 use io::write;
 use relative_path::RelativePathBuf;
@@ -30,7 +31,6 @@ use structure::Structure;
 use walkdir::WalkDir;
 
 mod config;
-mod err;
 mod io;
 mod structure;
 
@@ -46,12 +46,8 @@ mod subcommands {
     }
 }
 
-fn init_logger() {}
-
 fn main() {
     let structure = structure::Structure::resolve().unwrap();
-
-    init_logger();
 
     let matches = command!()
         .propagate_version(true)
@@ -104,56 +100,53 @@ fn main() {
         .get_matches();
 
     if let Err(error) = match matches.subcommand() {
-        Some((subcommands::INIT, _)) => init(&current_dir().unwrap()),
+        Some((subcommands::INIT, _)) => init(current_dir().unwrap()),
         Some((subcommands::NEW, sub_matches)) => {
             new(sub_matches.get_one("NAME").unwrap() as &String)
         }
         Some((subcommands::CONFIG, sub_matches)) => config(sub_matches, structure),
         _ => Ok(()),
     } {
-        eprintln!("{} Aborting!", error);
+        eprintln!("{}\n Aborting!", error);
     }
 }
 
-/// Initialize a new dottor repository in the current directory
-fn init(path: &Path) -> err::Result<()> {
+/// Initialize a new dottor repository in the given directory
+fn init<P: AsRef<Path>>(path: P) -> Result<()> {
+    let path = path.as_ref();
     // check that we don't accidentally populate an existing directory
     assert_empty(path)?;
 
     // create the default root configuration
     write(
-        &RelativePathBuf::from(ROOT_PATH).to_path("."),
-        toml::to_string_pretty(&RootConfiguration::default())
-            .map_err(|_| Error::new("could not create root configuration."))?
-            .as_bytes(),
+        &RelativePathBuf::from(ROOT_PATH).to_path(path),
+        toml::to_string_pretty(&RootConfiguration::default())?.as_bytes(),
     )?;
 
     // initialize a new git repository
     match Repository::init("./") {
         Ok(_) => Ok(()),
-        Err(_) => Err(Error::new("Could not initialize git repository.")),
+        Err(_) => Err(anyhow!("Could not initialize git repository.")),
     }
 }
 
-fn new(name: &str) -> err::Result<()> {
+fn new(name: &str) -> Result<()> {
     let path = RelativePathBuf::from(name).to_path(".");
     init(&path)
 }
 
 /// verifies that the structure of the dotfiles folder is correct
 /// It does not however verify the configs inside of the folder
-fn verify_structure(structure: Option<Structure>) -> err::Result<Structure> {
+fn verify_structure(structure: Option<Structure>) -> Result<Structure> {
     match structure {
         Some(value) => Ok(value),
-        None => Err(Error::new(
-            "Structure of the dotfiles repository is invalid.",
-        )),
+        None => Err(anyhow!("Structure of the dotfiles repository is invalid.",)),
     }
 }
 
 /// runs the config command
-fn config(matches: &ArgMatches, structure: Option<Structure>) -> err::Result<()> {
-    check_root_present()?;
+fn config(matches: &ArgMatches, structure: Option<Structure>) -> Result<()> {
+    assert_root_present()?;
     let structure = verify_structure(structure)?;
 
     match matches.subcommand() {
@@ -161,15 +154,15 @@ fn config(matches: &ArgMatches, structure: Option<Structure>) -> err::Result<()>
         Some((subcommands::config::DELETE, sub_matches)) => config_delete(sub_matches, structure),
         Some((subcommands::config::DEPLOY, sub_matches)) => config_deploy(sub_matches, structure),
         Some((subcommands::config::PULL, sub_matches)) => config_pull(sub_matches, structure),
-        _ => Err(err::Error::new("Invalid subcommand")),
+        _ => Err(anyhow!("Invalid subcommand")),
     }
 }
 
 /// creates a new config
-fn config_create(matches: &ArgMatches, structure: Structure) -> err::Result<()> {
+fn config_create(matches: &ArgMatches, structure: Structure) -> Result<()> {
     let name: &String = matches.get_one("NAME").expect("name not provided");
     if structure.configs.contains_key(name) {
-        return Err(Error::from_string(format!(
+        return Err(anyhow!(format!(
             "There already exists a config with the name '{}'",
             name
         )));
@@ -178,10 +171,10 @@ fn config_create(matches: &ArgMatches, structure: Structure) -> err::Result<()> 
 }
 
 /// deletes a config
-fn config_delete(matches: &ArgMatches, structure: Structure) -> err::Result<()> {
+fn config_delete(matches: &ArgMatches, structure: Structure) -> Result<()> {
     let name: &String = matches.get_one("NAME").expect("name not provided");
     if structure.configs.contains_key(name) {
-        return Err(Error::from_string(format!(
+        return Err(anyhow!(format!(
             "There is no config with the name '{}'",
             name
         )));
@@ -194,21 +187,19 @@ fn config_delete(matches: &ArgMatches, structure: Structure) -> err::Result<()> 
     }
 }
 
-fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()> {
+fn config_pull(matches: &ArgMatches, mut structure: Structure) -> Result<()> {
     let name: Option<&String> = matches.get_one("name");
     let all = matches.get_flag("all");
     let force = matches.get_flag("force");
 
     if let Some(name) = name {
         if all {
-            return Err(Error::new("You cannot use the all flag in combination with a specific configuration. Try removing \"--all\" or the configuration name."));
+            return Err(anyhow!("You cannot use the all flag in combination with a specific configuration. Try removing \"--all\" or the configuration name."));
         }
         let config = structure.configs.remove(name);
         match config {
             Some(config) => pull_single(&String::from(name), config, force),
-            None => Err(Error::from_string(format!(
-                "Config '{name}' does not exist."
-            ))),
+            None => Err(anyhow!(format!("Config '{name}' does not exist."))),
         }
     } else if all {
         for (name, config) in structure.configs {
@@ -222,12 +213,12 @@ fn config_pull(matches: &ArgMatches, mut structure: Structure) -> err::Result<()
         }
         Ok(())
     } else {
-        Err(Error::new("No configurations matched the query."))
+        Err(anyhow!("No configurations matched the query."))
     }
 }
 
 /// pull local changes from a config into the repository
-fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result<()> {
+fn pull_single(name: &String, config: Configuration, force: bool) -> Result<()> {
     fn print_file_name(
         name: &Path,
         modifier_symbol: &'static str,
@@ -279,7 +270,7 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
         "windows" => config.target.windows,
         "linux" => config.target.linux,
         value => {
-            return Err(Error::from_string(format!(
+            return Err(anyhow!(format!(
                 "Operating system '{value}' is not supported."
             )))
         }
@@ -300,9 +291,7 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
 
     // check 'file' and 'directory'
     if target.directory.is_some() && target.file.is_some() {
-        Err(Error::new(
-            "Cannot use both 'directory' and 'file' targets.",
-        ))
+        Err(anyhow!("Cannot use both 'directory' and 'file' targets.",))
     } else if let Some(from) = target.file {
         let from_file = PathBuf::from(shellexpand::tilde(&from).into_owned());
 
@@ -335,7 +324,7 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
             // resolve relative path
             let path_rel = to_abs
                 .strip_prefix(&to_dir)
-                .map_err(|_| Error::new("could not resolve relative path"))?;
+                .map_err(|_| anyhow!("could not resolve relative path"))?;
             // get source
             let from_abs = from_dir.join(path_rel);
 
@@ -356,7 +345,7 @@ fn pull_single(name: &String, config: Configuration, force: bool) -> err::Result
 
         Ok(())
     } else {
-        Err(Error::new("'file' or 'directory' target must be set"))
+        Err(anyhow!("'file' or 'directory' target must be set"))
     }
 }
 
@@ -366,7 +355,7 @@ fn pull_file(
     to: &String,
     exclude: &GlobSet,
     force: bool,
-) -> err::Result<()> {
+) -> Result<()> {
     // pull file from deployed configuration
     // there are four cases for this:
     //  1) from exists, to exists && unchanged -> do nothing
@@ -379,7 +368,7 @@ fn pull_file(
     // resolve relative path
     let path_rel = from
         .strip_prefix(from_dir)
-        .map_err(|_| Error::new("could not resolve relative path"))?;
+        .map_err(|_| anyhow!("could not resolve relative path"))?;
     let from_abs = from;
     // get destination
     let to_abs = to_dir.join(path_rel);
@@ -387,7 +376,9 @@ fn pull_file(
     if !exclude.is_match(path_rel) {
         // ensure that we aren't accidentally overwriting the dotconfig
         if to_abs == dotconfig {
-            return Err(Error::new("Trying to overwrite dotconfig.toml configuration file. Please add 'dotconfig.toml' to your excludes in the target configuration."));
+            return Err(
+                anyhow!("Trying to overwrite dotconfig.toml configuration file. Please add 'dotconfig.toml' to your excludes in the target configuration."),
+            );
         }
 
         // if the file exists, we check if any changes were made to it
@@ -553,20 +544,19 @@ fn print_end_line(separator_pos: usize, total_width: usize) {
 }
 
 /// deploy one or all configs to the local system
-fn config_deploy(matches: &ArgMatches, mut structure: Structure) -> err::Result<()> {
+fn config_deploy(matches: &ArgMatches, mut structure: Structure) -> Result<()> {
     let name: Option<&String> = matches.get_one("name");
     let all = matches.get_flag("all");
 
     if let Some(name) = name {
         if all {
-            return Err(Error::new("You cannot use the all flag in combination with a specific configuration. Try removing \"--all\" or the configuration name."));
+            return Err(anyhow!("You cannot use the all flag in combination with a specific configuration. Try removing \"--all\" or the configuration name."),
+                );
         }
         let config = structure.configs.remove(name);
         match config {
             Some(config) => deploy_single(&String::from(name), config),
-            None => Err(Error::from_string(format!(
-                "Config '{name}' does not exist."
-            ))),
+            None => Err(anyhow!(format!("Config '{name}' does not exist."))),
         }
     } else if all {
         for (name, config) in structure.configs {
@@ -577,16 +567,16 @@ fn config_deploy(matches: &ArgMatches, mut structure: Structure) -> err::Result<
         }
         Ok(())
     } else {
-        Err(Error::new("No configurations matched the query."))
+        Err(anyhow!("No configurations matched the query."))
     }
 }
 
-fn deploy_single(name: &String, config: Configuration) -> err::Result<()> {
+fn deploy_single(name: &String, config: Configuration) -> Result<()> {
     let target = match env::consts::OS {
         "windows" => config.target.windows,
         "linux" => config.target.linux,
         value => {
-            return Err(Error::from_string(format!(
+            return Err(anyhow!(format!(
                 "Operating system '{value}' is not supported."
             )))
         }
@@ -627,7 +617,7 @@ fn deploy_single(name: &String, config: Configuration) -> err::Result<()> {
     for from in get_paths_in(&config_dir, "**/*")? {
         let to = target_path.join(
             from.strip_prefix(&config_dir)
-                .map_err(|_| Error::new("could not resolve relative path"))?,
+                .map_err(|_| anyhow!("could not resolve relative path"))?,
         );
 
         if !(exclude_patterns.is_match(&from) || dotconfig == from) {
@@ -639,14 +629,14 @@ fn deploy_single(name: &String, config: Configuration) -> err::Result<()> {
     Ok(())
 }
 
-fn get_paths_in(dir: &Path, pattern: &str) -> err::Result<Vec<PathBuf>> {
+fn get_paths_in(dir: &Path, pattern: &str) -> Result<Vec<PathBuf>> {
     let glob = Glob::new(dir.join(pattern).to_str().unwrap())
         .unwrap()
         .compile_matcher();
 
     return list_dir(&glob, dir);
 
-    fn list_dir(glob: &GlobMatcher, dir: &Path) -> err::Result<Vec<PathBuf>> {
+    fn list_dir(glob: &GlobMatcher, dir: &Path) -> Result<Vec<PathBuf>> {
         let mut paths = Vec::new();
 
         for value in WalkDir::new(dir) {
@@ -658,7 +648,7 @@ fn get_paths_in(dir: &Path, pattern: &str) -> err::Result<Vec<PathBuf>> {
                         paths.push(path.into());
                     }
                 }
-                Err(error) => return Err(Error::new("walkdir error")),
+                Err(_) => return Err(anyhow!("walkdir error")),
             }
         }
 

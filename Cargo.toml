@@ -8,7 +8,7 @@ description = "a simple dotfiles manager"
 [profile.release]
 strip = true
 lto = true
-# codegen-units = 1
+codegen-units = 1
 
 [dependencies]
 
@@ -18,9 +18,9 @@ clap = { version = "4.5.1", features = ["cargo"] }
 toml = "0.8.10"
 # serialisation
 serde = { version = "1.0.197", features = ["derive"] }
+# Paths
 regex = "1.10.3"
 lazy_static = "1.4.0"
-# path_abs = "0.5.1"
 relative-path = "1.9.2"
 walkdir = "2.5.0"
 globset = "0.4.14"
@@ -28,4 +28,5 @@ shellexpand = "3.1.0"
 # diffing library for comparing changes when pulling
 similar = { version = "2.4.0", features = ["unicode", "inline"] }
 # git integration
-git2 = "0.18.2"
+git2 = "0.19.0"
+anyhow = "1.0.95"
