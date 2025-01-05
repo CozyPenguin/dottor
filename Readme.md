@@ -16,8 +16,8 @@ Currently the only functional one is exclude, which takes a list of folders in w
 
 Dottor is still in early development, so feedback and contributions are very appreciated.
 
-If you have found a bug, please open an [issue](https://github.com/CozyPenguin/dottor/issues/new).
+If you have found a bug, please open an [issue](https://github.com/cschierig/dottor/issues/new).
 
 If you want to add a feature, you can open a pull request.
 If you want to add something which requires changing existing systems or you are unsure if your idea fits the scope of the project,
-you can contact me by any of the methods mentioned in my [Profile Readme](https://github.com/CozyPenguin).
+you can contact me by any of the methods mentioned in my [Profile Readme](https://github.com/cschierig).
